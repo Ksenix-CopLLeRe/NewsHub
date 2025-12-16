@@ -1,0 +1,43 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}NewsHub{% endblock %}</title>
+    
+    <link rel="stylesheet" href="{% static 'css/style.css' %}?v=2">
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+    <header>
+        <nav class='navbar'>
+            <div class='container'>
+                <a href="{% url 'news:home' %}" class="logo">NewsHub</a>
+                <ul class="nav-menu">
+                    <li><a href="{% url 'news:home' %}">Главная</a></li>
+                    {% if user.is_authenticated %}
+                        <li><a href="{% url 'news:favorites' %}">Избранное</a></li>
+                        <li><a href="#">{{ user.username }}</a></li>
+                        <li><a href="{% url 'news:logout' %}">Выйти</a></li>
+                    {% else %}
+                        <li><a href="{% url 'news:login' %}">Войти</a></li>
+                        <li><a href="{% url 'news:register' %}">Регистрация</a></li>
+                    {% endif %}
+            </div>
+            </ul>
+        </nav>
+    </header>
+
+    <main>
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer>
+        <p>&copy; 2025 NewsHub. Все права защищены.</p>
+    </footer>
+
+    <script src="{% static 'js/script.js' %}"></script>
+    {% block extra_js %}{% endblock %}
+</body>
+</html>

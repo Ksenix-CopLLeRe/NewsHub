@@ -1,0 +1,127 @@
+{% extends 'base.html' %}
+{% load static %}
+{% load news_extras %}
+
+{% block title %}Новости - NewsHub{% endblock %}
+
+{% block content %}
+<div class="container">
+    <h1>Новости от Lenta.ru</h1>
+    
+    <div class="categories">
+        {% for cat in categories %}
+            <a href="?category={{ cat.code }}{% if query %}&q={{ query|urlencode }}{% endif %}" 
+               class="category-btn{% if current_category == cat.code %} active{% endif %}">
+                {{ cat.name }}
+            </a>
+        {% endfor %}
+    </div>
+
+    <!-- Форма поиска по ключевым словам -->
+   <form method="get" action="{% url 'news:home' %}" class="news-search-form">
+        <input type="hidden" name="category" value="{{ current_category }}">
+        <input 
+            class="news-search-form__input" 
+            type="search"
+            name="q" 
+            autocomplete='off'
+            placeholder="Поиск по новостям..." 
+            aria-label="Search"
+            value="{{ query }}"
+        >
+    </form>
+    
+    <div class="news-grid">
+        {% for article in articles %}
+            <article class="news-card" data-article-url="{{ article.url }}">
+                <div class="news-card-header">
+                    {% if user.is_authenticated %}
+                        <button class="favorite-btn" 
+                                data-url="{{ article.url }}"
+                                data-title="{{ article.title }}"
+                                data-description="{{ article.description }}"
+                                data-image="{{ article.urlToImage }}"
+                                data-source='{"name": "{{ article.source.name }}"}'
+                                data-published="{{ article.publishedAt }}"
+                                title="{% if article.url in favorite_urls %}Удалить из избранного{% else %}Добавить в избранное{% endif %}">
+                            {% if article.url in favorite_urls %}
+                                <span class="favorite-icon">⭐</span>
+                            {% else %}
+                                <span class="favorite-icon">☆</span>
+                            {% endif %}
+                        </button>
+                    {% endif %}
+                </div>
+                
+                {% if article.urlToImage %}
+                    <img src="{{ article.urlToImage }}" alt="{{ article.title }}" >
+                {% else %}
+                    <div class="news-image-placeholder">
+                        <img src="{% static 'images/no-image.png' %}" alt="Нет изображения">
+                    </div>
+                {% endif %}
+                
+                <div class="news-content">
+                    <h3>{{ article.title|truncatechars:100 }}</h3>
+                    <p class="news-description">{{ article.description|truncatechars:200 }}</p>
+                    <div class="news-footer">
+                        <span class="news-source">{{ article.source.name }}</span>
+                        <a href="{{ article.url }}" target="_blank" class="read-more-btn">Читать далее</a>
+                    </div>
+                </div>
+                
+                {% if user.is_authenticated %}
+                    <div class="reactions-panel">
+                        <div class="reactions-buttons">
+                            {% with article_reactions=reactions_count|get_item:article.url %}
+                            <button class="reaction-btn {% if user_reactions|get_item:article.url == 'important' %}active{% endif %}" 
+                                    data-reaction="important" 
+                                    data-url="{{ article.url }}"
+                                    title="важно">
+                                🔥 <span class="reaction-count" data-reaction="important">
+                                    {% if article_reactions.important %}{{ article_reactions.important }}{% endif %}
+                                </span>
+                            </button>
+                            <button class="reaction-btn {% if user_reactions|get_item:article.url == 'interesting' %}active{% endif %}" 
+                                    data-reaction="interesting" 
+                                    data-url="{{ article.url }}"
+                                    title="интересно">
+                                🤔 <span class="reaction-count" data-reaction="interesting">
+                                    {% if article_reactions.interesting %}{{ article_reactions.interesting }}{% endif %}
+                                </span>
+                            </button>
+                            <button class="reaction-btn {% if user_reactions|get_item:article.url == 'shocking' %}active{% endif %}" 
+                                    data-reaction="shocking" 
+                                    data-url="{{ article.url }}"
+                                    title="шокирует">
+                                😱 <span class="reaction-count" data-reaction="shocking">
+                                    {% if article_reactions.shocking %}{{ article_reactions.shocking }}{% endif %}
+                                </span>
+                            </button>
+                            <button class="reaction-btn {% if user_reactions|get_item:article.url == 'useful' %}active{% endif %}" 
+                                    data-reaction="useful" 
+                                    data-url="{{ article.url }}"
+                                    title="полезно">
+                                💡 <span class="reaction-count" data-reaction="useful">
+                                    {% if article_reactions.useful %}{{ article_reactions.useful }}{% endif %}
+                                </span>
+                            </button>
+                            <button class="reaction-btn {% if user_reactions|get_item:article.url == 'liked' %}active{% endif %}" 
+                                    data-reaction="liked" 
+                                    data-url="{{ article.url }}"
+                                    title="нравится">
+                                ❤️ <span class="reaction-count" data-reaction="liked">
+                                    {% if article_reactions.liked %}{{ article_reactions.liked }}{% endif %}
+                                </span>
+                            </button>
+                            {% endwith %}
+                        </div>
+                    </div>
+                {% endif %}
+            </article>
+        {% empty %}
+            <p class="no-news">Новости не найдены.</p>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}

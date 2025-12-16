@@ -1,0 +1,59 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Избранное - NewsHub{% endblock %}
+
+{% block content %}
+<div class="container">
+    <h1>Мои избранные статьи</h1>
+
+    <div class="favorites-list">
+        {% if articles_with_comments %}
+            {% for item in articles_with_comments %}
+                <article class="favorite-article-card">
+                    <div class="favorite-article-header">
+                        <h2><a href="{{ item.article.url }}" target="_blank">{{ item.article.title }}</a></h2>
+                        <span class="article-date">{{ item.article.added_at|date:"d.m.Y H:i" }}</span>
+                    </div>
+                    
+                    {% if item.article.image_url %}
+                        <img src="{{ item.article.image_url }}" alt="{{ item.article.title }}" class="favorite-article-image">
+                    {% endif %}
+                    
+                    <p class="favorite-article-description">{{ item.article.description|truncatechars:300 }}</p>
+                    <p class="favorite-article-source">Источник: {{ item.article.source_name }}</p>
+                    
+                    <div class="comments-section">
+                        <h3>Мои комментарии:</h3>
+                        <div class="comments-list" data-article-id="{{ item.article.id }}">
+                            {% for comment in item.comments %}
+                                <div class="comment-item" data-comment-id="{{ comment.id }}">
+                                    <div class="comment-content">
+                                        <p class="comment-text">{{ comment.text }}</p>
+                                        <span class="comment-date">{{ comment.created_at|date:"d.m.Y H:i" }}</span>
+                                    </div>
+                                    <div class="comment-actions">
+                                        <button class="edit-comment-btn" data-comment-id="{{ comment.id }}">Редактировать</button>
+                                        <button class="delete-comment-btn" data-comment-id="{{ comment.id }}">Удалить</button>
+                                    </div>
+                                </div>
+                            {% empty %}
+                                <p class="no-comments">Пока нет комментариев</p>
+                            {% endfor %}
+                        </div>
+                        
+                        <div class="add-comment-form">
+                            <textarea class="comment-input" 
+                                      placeholder="Добавить комментарий..." 
+                                      rows="3"></textarea>
+                            <button class="add-comment-btn" data-article-id="{{ item.article.id }}">Добавить комментарий</button>
+                        </div>
+                    </div>
+                </article>
+            {% endfor %}
+        {% else %}
+            <p class="no-favorites">У вас пока нет избранных статей</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
