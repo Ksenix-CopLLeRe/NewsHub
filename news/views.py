@@ -6,8 +6,12 @@ from django.contrib.auth.forms import UserCreationForm, AuthenticationForm
 from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
 from django.utils import timezone
-from .rss_parser import fetch_rss_news
 from .models import FavoriteArticle, Comment, Reaction
+from .services import (
+    get_feed_client,
+    get_user_content_client,
+    get_reactions_client,
+)
 import json
 
 
@@ -57,9 +61,9 @@ def home(request):
     category = request.GET.get('category', 'russia')
     query = request.GET.get('q', '').strip()
 
-    articles = fetch_rss_news(category=category)
-    if not articles:
-        articles = TEST_ARTICLES
+    # BFF: получаем ленту новостей через клиент (позже здесь будет FastAPI Feed Service)
+    feed_client = get_feed_client()
+    articles = feed_client.get_feed(category=category, query=query)
     
     categories = [
         {'code': 'general', 'name': 'Все новости'},
@@ -71,59 +75,25 @@ def home(request):
         {'code': 'culture', 'name': 'Культура'},
     ]
 
-    if query:
-        query_lower = query.lower().strip()
-        if query_lower:  # Проверяем, что запрос не пустой после обработки
-            filtered_articles = []
-            for article in articles:
-                # Безопасная обработка None значений
-                title = article.get('title') or ''
-                description = article.get('description') or ''
-                
-                # Преобразуем в строку и приводим к нижнему регистру
-                title_lower = str(title).lower()
-                desc_lower = str(description).lower()
-                
-                # Поиск по заголовку и описанию
-                title_match = query_lower in title_lower
-                desc_match = query_lower in desc_lower
-                
-                if title_match or desc_match:
-                    filtered_articles.append(article)
-            
-            articles = filtered_articles
-
     # Получаем информацию об избранном и реакциях для авторизованных пользователей
     favorite_urls = set()
     user_reactions = {}
     reactions_count = {}
     
     if request.user.is_authenticated:
-        # Избранное
-        favorite_urls = set(
-            FavoriteArticle.objects.filter(user=request.user)
-            .values_list('url', flat=True)
+        user_content_client = get_user_content_client()
+        reactions_client = get_reactions_client()
+
+        # Избранное через клиент User Content Service
+        favorite_urls = user_content_client.get_favorite_urls(request.user)
+
+        # Реакции и счетчики через клиент Reactions Service
+        urls = [a.get('url') for a in articles if a.get('url')]
+        reactions_data = reactions_client.get_user_reactions_for_urls(
+            request.user, urls
         )
-        
-        # Реакции пользователя
-        user_reactions_dict = {
-            r.article_url: r.reaction_type 
-            for r in Reaction.objects.filter(user=request.user)
-        }
-        user_reactions = user_reactions_dict
-        
-        # Количество реакций для каждой новости
-        for article in articles:
-            url = article.get('url')
-            if url:
-                reactions = Reaction.objects.filter(article_url=url)
-                count_dict = {}
-                for reaction_type, _ in Reaction.REACTION_TYPES:
-                    count = reactions.filter(reaction_type=reaction_type).count()
-                    if count > 0:
-                        count_dict[reaction_type] = count
-                # Всегда добавляем словарь, даже если он пустой
-                reactions_count[url] = count_dict
+        user_reactions = reactions_data["user_reactions"]
+        reactions_count = reactions_data["reactions_count"]
 
     context = {
         'articles': articles,
@@ -156,16 +126,10 @@ def favorites(request):
             - article: Объект FavoriteArticle
             - comments: QuerySet комментариев к статье
     """
-    favorite_articles = FavoriteArticle.objects.filter(user=request.user)
-    
-    # Добавляем комментарии к каждой статье
-    articles_with_comments = []
-    for article in favorite_articles:
-        comments = Comment.objects.filter(article=article, user=request.user)
-        articles_with_comments.append({
-            'article': article,
-            'comments': comments,
-        })
+    user_content_client = get_user_content_client()
+    articles_with_comments = user_content_client.get_favorites_with_comments(
+        request.user
+    )
     
     context = {
         'title': 'Избранное',
@@ -247,50 +211,10 @@ def toggle_favorite(request):
     """
     try:
         data = json.loads(request.body)
-        article_url = data.get('url')
-        title = data.get('title', '')
-        description = data.get('description', '')
-        image_url = data.get('urlToImage', '')
-        source_name = data.get('source', {}).get('name', 'Lenta.ru')
-        published_at_str = data.get('publishedAt', '')
-        
-        if not article_url:
-            return JsonResponse({'success': False, 'error': 'URL статьи не указан'}, status=400)
-        
-        # Парсим дату публикации
-        try:
-            from datetime import datetime
-            if published_at_str:
-                if 'T' in published_at_str:
-                    published_at = datetime.fromisoformat(published_at_str.replace('Z', '+00:00'))
-                else:
-                    published_at = timezone.now()
-            else:
-                published_at = timezone.now()
-            if timezone.is_naive(published_at):
-                published_at = timezone.make_aware(published_at)
-        except:
-            published_at = timezone.now()
-        
-        favorite, created = FavoriteArticle.objects.get_or_create(
-            user=request.user,
-            url=article_url,
-            defaults={
-                'title': title,
-                'description': description,
-                'image_url': image_url,
-                'source_name': source_name,
-                'published_at': published_at,
-            }
-        )
-        
-        if not created:
-            # Удаляем из избранного
-            favorite.delete()
-            return JsonResponse({'success': True, 'is_favorite': False})
-        
-        return JsonResponse({'success': True, 'is_favorite': True})
-    
+        user_content_client = get_user_content_client()
+        result = user_content_client.toggle_favorite(request.user, data)
+        status = result.pop("status", 200)
+        return JsonResponse(result, status=status)
     except Exception as e:
         return JsonResponse({'success': False, 'error': str(e)}, status=500)
 
@@ -328,65 +252,15 @@ def add_reaction(request):
         data = json.loads(request.body)
         article_url = data.get('url')
         reaction_type = data.get('reaction_type')
-        
-        if not article_url or not reaction_type:
-            return JsonResponse({'success': False, 'error': 'Не указаны обязательные параметры'}, status=400)
-        
-        # Проверяем, что тип реакции валидный
-        valid_types = [rt[0] for rt in Reaction.REACTION_TYPES]
-        if reaction_type not in valid_types:
-            return JsonResponse({'success': False, 'error': 'Неверный тип реакции'}, status=400)
-        
-        # Получаем или создаем реакцию
-        reaction, created = Reaction.objects.get_or_create(
-            user=request.user,
-            article_url=article_url,
-            defaults={'reaction_type': reaction_type}
+
+        reactions_client = get_reactions_client()
+        result = reactions_client.toggle_reaction(
+            request.user, article_url, reaction_type
         )
-        
-        if not created:
-            # Если реакция уже существует, обновляем её
-            if reaction.reaction_type == reaction_type:
-                # Та же реакция - удаляем (отмена реакции)
-                reaction.delete()
-                return JsonResponse({
-                    'success': True, 
-                    'reaction_type': None,
-                    'reactions_count': _get_reactions_count(article_url)
-                })
-            else:
-                # Меняем тип реакции
-                reaction.reaction_type = reaction_type
-                reaction.save()
-        
-        return JsonResponse({
-            'success': True,
-            'reaction_type': reaction_type,
-            'reactions_count': _get_reactions_count(article_url)
-        })
-    
+        status = result.pop("status", 200)
+        return JsonResponse(result, status=status)
     except Exception as e:
         return JsonResponse({'success': False, 'error': str(e)}, status=500)
-
-
-def _get_reactions_count(article_url):
-    """
-    Вспомогательная функция для получения количества реакций по типам.
-    
-    Args:
-        article_url: URL новости
-        
-    Returns:
-        dict: Словарь {reaction_type: count} для всех типов реакций,
-              где count > 0
-    """
-    reactions = Reaction.objects.filter(article_url=article_url)
-    count_dict = {}
-    for reaction_type, _ in Reaction.REACTION_TYPES:
-        count = reactions.filter(reaction_type=reaction_type).count()
-        if count > 0:
-            count_dict[reaction_type] = count
-    return count_dict
 
 
 @login_required
@@ -424,27 +298,11 @@ def add_comment(request):
         data = json.loads(request.body)
         article_id = data.get('article_id')
         text = data.get('text', '').strip()
-        
-        if not article_id or not text:
-            return JsonResponse({'success': False, 'error': 'Не указаны обязательные параметры'}, status=400)
-        
-        article = get_object_or_404(FavoriteArticle, id=article_id, user=request.user)
-        
-        comment = Comment.objects.create(
-            article=article,
-            user=request.user,
-            text=text
-        )
-        
-        return JsonResponse({
-            'success': True,
-            'comment': {
-                'id': comment.id,
-                'text': comment.text,
-                'created_at': comment.created_at.strftime('%d.%m.%Y %H:%M'),
-            }
-        })
-    
+
+        user_content_client = get_user_content_client()
+        result = user_content_client.add_comment(request.user, article_id, text)
+        status = result.pop("status", 200)
+        return JsonResponse(result, status=status)
     except Exception as e:
         return JsonResponse({'success': False, 'error': str(e)}, status=500)
 
@@ -481,25 +339,13 @@ def edit_comment(request, comment_id):
         404 если комментарий не найден или не принадлежит пользователю
     """
     try:
-        comment = get_object_or_404(Comment, id=comment_id, user=request.user)
         data = json.loads(request.body)
         text = data.get('text', '').strip()
-        
-        if not text:
-            return JsonResponse({'success': False, 'error': 'Текст комментария не может быть пустым'}, status=400)
-        
-        comment.text = text
-        comment.save()
-        
-        return JsonResponse({
-            'success': True,
-            'comment': {
-                'id': comment.id,
-                'text': comment.text,
-                'created_at': comment.created_at.strftime('%d.%m.%Y %H:%M'),
-            }
-        })
-    
+
+        user_content_client = get_user_content_client()
+        result = user_content_client.edit_comment(request.user, comment_id, text)
+        status = result.pop("status", 200)
+        return JsonResponse(result, status=status)
     except Exception as e:
         return JsonResponse({'success': False, 'error': str(e)}, status=500)
 
@@ -528,10 +374,9 @@ def delete_comment(request, comment_id):
         404 если комментарий не найден или не принадлежит пользователю
     """
     try:
-        comment = get_object_or_404(Comment, id=comment_id, user=request.user)
-        comment.delete()
-        
-        return JsonResponse({'success': True})
-    
+        user_content_client = get_user_content_client()
+        result = user_content_client.delete_comment(request.user, comment_id)
+        status = result.pop("status", 200)
+        return JsonResponse(result, status=status)
     except Exception as e:
         return JsonResponse({'success': False, 'error': str(e)}, status=500)

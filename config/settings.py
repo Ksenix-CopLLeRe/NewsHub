@@ -132,6 +132,32 @@ STATICFILES_DIRS = [
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
+# --- BFF / внутренние микросервисы ---
+#
+# Эти настройки описывают будущие FastAPI‑сервисы, с которыми будет общаться Django‑монолит.
+# Сейчас они не используются (работают локальные реализации в news.services.*),
+# но задают «скелет» для микросервисной архитектуры.
+
+USE_REMOTE_SERVICES = os.getenv("USE_REMOTE_SERVICES", "false").lower() == "true"
+
+INTERNAL_SERVICES = {
+    "FEED": {
+        # Например: http://feed-service:8000
+        "BASE_URL": os.getenv("FEED_SERVICE_URL", ""),
+        "INTERNAL_TOKEN": os.getenv("FEED_SERVICE_TOKEN", ""),
+    },
+    "USER_CONTENT": {
+        # Например: http://user-content-service:8001
+        "BASE_URL": os.getenv("USER_CONTENT_SERVICE_URL", ""),
+        "INTERNAL_TOKEN": os.getenv("USER_CONTENT_SERVICE_TOKEN", ""),
+    },
+    "REACTIONS": {
+        # Например: http://reactions-service:8002
+        "BASE_URL": os.getenv("REACTIONS_SERVICE_URL", ""),
+        "INTERNAL_TOKEN": os.getenv("REACTIONS_SERVICE_TOKEN", ""),
+    },
+}
+
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
