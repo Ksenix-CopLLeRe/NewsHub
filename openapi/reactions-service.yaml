@@ -1,0 +1,388 @@
+openapi: 3.0.0
+info:
+  title: Reactions & Counters Service API
+  description: |
+    Микросервис для управления эмоциональными реакциями пользователей на новости
+    и предоставления агрегированных счетчиков по типам реакций.
+    
+    Сервис поддерживает 5 типов реакций:
+    - 🔥 important (важно)
+    - 🤔 interesting (интересно)
+    - 😱 shocking (шокирует)
+    - 💡 useful (полезно)
+    - ❤️ liked (нравится)
+    
+    Каждый пользователь может оставить только одну реакцию на конкретную новость.
+    Повторный запрос с тем же типом удаляет реакцию (toggle-поведение).
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:8001
+    description: Локальный сервер для разработки (рекомендуемый порт для микросервиса реакций)
+  - url: http://reactions-service:8001
+    description: Внутреннее имя сервиса в Docker-сети
+
+paths:
+  # 1. POST /reactions/ - создать/обновить реакцию
+  /reactions:
+    post:
+      summary: Добавить или обновить реакцию
+      description: |
+        Создаёт новую реакцию пользователя на новость или обновляет существующую.
+        
+        Особенности работы:
+        - Если у пользователя ещё нет реакции на данную новость - создаётся новая
+        - Если реакция уже существует и передан ТОТ ЖЕ тип - реакция УДАЛЯЕТСЯ (toggle)
+        - Если реакция уже существует и передан ДРУГОЙ тип - тип обновляется
+        - Один пользователь может иметь только одну реакцию на одну новость
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReactionCreate'
+            examples:
+              create_reaction:
+                summary: Пример создания реакции
+                value:
+                  user_id: 123
+                  news_id: "https://lenta.ru/news/2025/03/01/example/"
+                  reaction_type: "important"
+      responses:
+        '200':
+          description: Реакция успешно обновлена (или удалена при toggle)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  action:
+                    type: string
+                    enum: [created, updated, deleted]
+                    description: Что произошло с реакцией
+                    example: updated
+                  reaction:
+                    $ref: '#/components/schemas/Reaction'
+        '201':
+          description: Реакция успешно создана
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  action:
+                    type: string
+                    example: created
+                  reaction:
+                    $ref: '#/components/schemas/Reaction'
+        '400':
+          description: Ошибка в данных запроса
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: Конфликт - пользователь уже имеет реакцию на эту новость
+          $ref: '#/components/responses/Conflict'
+
+  # 2. GET /reactions/news/{newsId} - получить все реакции на новость
+  /reactions/news/{newsId}:
+    get:
+      summary: Получить все реакции на конкретную новость
+      description: Возвращает список всех реакций пользователей на указанную новость с поддержкой пагинации
+      parameters:
+        - name: newsId
+          in: path
+          required: true
+          description: ID новости (URL-encoded при необходимости)
+          schema:
+            type: string
+            example: "https://lenta.ru/news/2025/03/01/example/"
+        - name: page
+          in: query
+          required: false
+          description: Номер страницы (начиная с 1)
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+            example: 1
+        - name: size
+          in: query
+          required: false
+          description: Количество элементов на странице
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+            example: 10
+      responses:
+        '200':
+          description: Успешный ответ со списком реакций
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReactionList'
+        '404':
+          description: Новость не найдена (нет ни одной реакции)
+          $ref: '#/components/responses/NotFound'
+
+  # 3. GET /reactions/counts/{newsId} - получить агрегированные счетчики
+  /reactions/counts/{newsId}:
+    get:
+      summary: Получить агрегированные счетчики реакций
+      description: Возвращает количество реакций каждого типа для указанной новости
+      parameters:
+        - name: newsId
+          in: path
+          required: true
+          description: ID новости
+          schema:
+            type: string
+            example: "https://lenta.ru/news/2025/03/01/example/"
+      responses:
+        '200':
+          description: Успешный ответ со счетчиками
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReactionCounts'
+              examples:
+                with_reactions:
+                  summary: Новость с реакциями
+                  value:
+                    news_id: "https://lenta.ru/news/2025/03/01/example/"
+                    counts:
+                      important: 15
+                      interesting: 23
+                      shocking: 7
+                      useful: 42
+                      liked: 31
+                    total: 118
+                without_reactions:
+                  summary: Новость без реакций
+                  value:
+                    news_id: "https://lenta.ru/news/2025/03/01/without-reactions/"
+                    counts:
+                      important: 0
+                      interesting: 0
+                      shocking: 0
+                      useful: 0
+                      liked: 0
+                    total: 0
+        '404':
+          description: Новость не найдена (не было запросов к этому newsId)
+          $ref: '#/components/responses/NotFound'
+
+components:
+  schemas:
+    # Типы реакций как enum (перечисление допустимых значений)
+    ReactionType:
+      type: string
+      description: Тип эмоциональной реакции
+      enum:
+        - important
+        - interesting
+        - shocking
+        - useful
+        - liked
+      example: important
+
+    # Полная модель реакции (с ID)
+    Reaction:
+      type: object
+      description: Полная модель реакции пользователя на новость
+      properties:
+        id:
+          type: integer
+          description: Уникальный идентификатор реакции
+          example: 42
+        user_id:
+          type: integer
+          description: ID пользователя, оставившего реакцию
+          example: 123
+        news_id:
+          type: string
+          description: Уникальный идентификатор новости (URL или внутренний ID)
+          example: "https://lenta.ru/news/2025/03/01/example/"
+        reaction_type:
+          $ref: '#/components/schemas/ReactionType'
+        created_at:
+          type: string
+          format: date-time
+          description: Дата и время создания реакции (ISO 8601)
+          example: "2025-03-01T18:00:00Z"
+      required:
+        - id
+        - user_id
+        - news_id
+        - reaction_type
+        - created_at
+
+    # Модель для создания/обновления реакции (без ID и даты)
+    ReactionCreate:
+      type: object
+      description: Данные для создания или обновления реакции
+      properties:
+        user_id:
+          type: integer
+          description: ID пользователя
+          example: 123
+        news_id:
+          type: string
+          description: ID новости (URL)
+          example: "https://lenta.ru/news/2025/03/01/example/"
+        reaction_type:
+          $ref: '#/components/schemas/ReactionType'
+      required:
+        - user_id
+        - news_id
+        - reaction_type
+
+    # Агрегированные счетчики реакций
+    ReactionCounts:
+      type: object
+      description: Агрегированные счетчики реакций для конкретной новости
+      properties:
+        news_id:
+          type: string
+          description: ID новости
+          example: "https://lenta.ru/news/2025/03/01/example/"
+        counts:
+          type: object
+          description: Объект с количеством реакций каждого типа
+          properties:
+            important:
+              type: integer
+              description: Количество реакций "важно"
+              example: 15
+            interesting:
+              type: integer
+              description: Количество реакций "интересно"
+              example: 23
+            shocking:
+              type: integer
+              description: Количество реакций "шокирует"
+              example: 7
+            useful:
+              type: integer
+              description: Количество реакций "полезно"
+              example: 42
+            liked:
+              type: integer
+              description: Количество реакций "нравится"
+              example: 31
+        total:
+          type: integer
+          description: Общее количество реакций
+          example: 118
+      required:
+        - news_id
+        - counts
+        - total
+
+    # Ответ со списком реакций
+    ReactionList:
+      type: object
+      description: Список реакций с пагинацией
+      properties:
+        items:
+          type: array
+          description: Массив реакций
+          items:
+            $ref: '#/components/schemas/Reaction'
+        total:
+          type: integer
+          description: Общее количество реакций (без учёта пагинации)
+          example: 42
+        page:
+          type: integer
+          description: Номер текущей страницы
+          example: 1
+        size:
+          type: integer
+          description: Размер страницы
+          example: 10
+
+  # Переиспользуемые ответы с ошибками
+  responses:
+    BadRequest:
+      description: Ошибка в запросе (некорректные данные)
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                description: Описание ошибки
+                example: "Некорректные данные: поле user_id должно быть числом"
+              code:
+                type: integer
+                description: Код ошибки
+                example: 400
+              details:
+                type: object
+                description: Детальная информация об ошибках валидации
+                additionalProperties: true
+                example:
+                  user_id: ["Обязательное поле"]
+                  reaction_type: ["Значение должно быть из списка: important, interesting, shocking, useful, liked"]
+    NotFound:
+      description: Ресурс не найден
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                example: "Реакции для новости не найдены"
+              code:
+                type: integer
+                example: 404
+    Conflict:
+      description: Конфликт при создании ресурса
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                example: "Пользователь уже имеет реакцию на эту новость"
+              code:
+                type: integer
+                example: 409
+              existing_reaction:
+                $ref: '#/components/schemas/Reaction'
+    Unauthorized:
+      description: Не авторизован (требуется аутентификация)
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                example: "Требуется аутентификация"
+              code:
+                type: integer
+                example: 401
+    Forbidden:
+      description: Доступ запрещён (недостаточно прав)
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                example: "Недостаточно прав для выполнения операции"
+              code:
+                type: integer
+                example: 403
