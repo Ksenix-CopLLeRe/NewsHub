@@ -1,0 +1,792 @@
+openapi: 3.0.0
+info:
+  title: User Content Service API
+  description: |
+    Микросервис для управления персональными данными пользователя вокруг статей.
+    
+    Сервис отвечает за:
+    - Избранное (toggle по URL) - добавление и удаление статей из избранного пользователя
+    - Комментарии к избранному - создание, редактирование и удаление комментариев к сохраненным статьям
+    - Проверки «статья есть в избранном пользователя» для комментариев
+    
+    База данных: отдельная БД с таблицами favorite_articles и comments.
+    
+    Особенности:
+    - Каждый пользователь может добавить статью в избранное только один раз (уникальность по user_id и url)
+    - Комментарии можно оставлять только к статьям, которые есть в избранном пользователя
+    - Комментарии видны только автору комментария
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:8002
+    description: Локальный сервер для разработки (рекомендуемый порт для микросервиса User Content)
+  - url: http://user-content-service:8002
+    description: Внутреннее имя сервиса в Docker-сети
+
+paths:
+  # 1. POST /favorites/toggle - добавить/удалить из избранного
+  /favorites/toggle:
+    post:
+      summary: Добавить или удалить статью из избранного
+      description: |
+        Переключает состояние статьи в избранном пользователя (toggle).
+        
+        Особенности работы:
+        - Если статья НЕ в избранном - добавляет её
+        - Если статья УЖЕ в избранном - удаляет её
+        - Один пользователь может иметь только одну запись для каждой статьи (уникальность по user_id и url)
+        - При добавлении сохраняются метаданные статьи (заголовок, описание, изображение, источник, дата публикации)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FavoriteToggleRequest'
+            examples:
+              add_to_favorites:
+                summary: Добавить статью в избранное
+                value:
+                  user_id: 123
+                  url: "https://lenta.ru/news/2025/03/01/example/"
+                  title: "Заголовок новости"
+                  description: "Описание новости"
+                  url_to_image: "https://example.com/image.jpg"
+                  source_name: "Lenta.ru"
+                  published_at: "2025-03-01T18:00:00Z"
+      responses:
+        '200':
+          description: Статус избранного успешно изменен
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FavoriteToggleResponse'
+              examples:
+                added:
+                  summary: Статья добавлена в избранное
+                  value:
+                    success: true
+                    is_favorite: true
+                    action: "added"
+                removed:
+                  summary: Статья удалена из избранного
+                  value:
+                    success: true
+                    is_favorite: false
+                    action: "removed"
+        '400':
+          description: Ошибка в данных запроса
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: Не авторизован
+          $ref: '#/components/responses/Unauthorized'
+
+  # 2. GET /favorites - получить список избранного пользователя
+  /favorites:
+    get:
+      summary: Получить список избранных статей пользователя
+      description: |
+        Возвращает список всех статей, сохраненных пользователем в избранное,
+        с поддержкой пагинации. Опционально может включать комментарии к статьям.
+      parameters:
+        - name: user_id
+          in: query
+          required: true
+          description: ID пользователя
+          schema:
+            type: integer
+            example: 123
+        - name: include_comments
+          in: query
+          required: false
+          description: Включить комментарии к статьям в ответ
+          schema:
+            type: boolean
+            default: false
+            example: true
+        - name: page
+          in: query
+          required: false
+          description: Номер страницы (начиная с 1)
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+            example: 1
+        - name: size
+          in: query
+          required: false
+          description: Количество элементов на странице
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+            example: 10
+      responses:
+        '200':
+          description: Успешный ответ со списком избранных статей
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FavoriteList'
+        '400':
+          description: Ошибка в параметрах запроса
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: Не авторизован
+          $ref: '#/components/responses/Unauthorized'
+
+  # 3. GET /favorites/check/{url} - проверить, есть ли статья в избранном
+  /favorites/check/{url}:
+    get:
+      summary: Проверить наличие статьи в избранном пользователя
+      description: |
+        Проверяет, находится ли указанная статья в избранном пользователя.
+        Используется для отображения состояния кнопки "В избранное" и для проверки
+        возможности добавления комментариев.
+      parameters:
+        - name: url
+          in: path
+          required: true
+          description: URL статьи (URL-encoded при необходимости)
+          schema:
+            type: string
+            example: "https://lenta.ru/news/2025/03/01/example/"
+        - name: user_id
+          in: query
+          required: true
+          description: ID пользователя
+          schema:
+            type: integer
+            example: 123
+      responses:
+        '200':
+          description: Результат проверки
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FavoriteCheckResponse'
+              examples:
+                is_favorite:
+                  summary: Статья в избранном
+                  value:
+                    is_favorite: true
+                    article_id: 42
+                not_favorite:
+                  summary: Статья не в избранном
+                  value:
+                    is_favorite: false
+                    article_id: null
+        '400':
+          description: Ошибка в параметрах запроса
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: Не авторизован
+          $ref: '#/components/responses/Unauthorized'
+
+  # 4. GET /favorites/urls - получить список URL избранных статей
+  /favorites/urls:
+    get:
+      summary: Получить список URL избранных статей пользователя
+      description: |
+        Возвращает множество URL всех статей, сохраненных пользователем в избранное.
+        Используется для быстрой проверки наличия статей в избранном без загрузки полных данных.
+      parameters:
+        - name: user_id
+          in: query
+          required: true
+          description: ID пользователя
+          schema:
+            type: integer
+            example: 123
+      responses:
+        '200':
+          description: Успешный ответ со списком URL
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FavoriteUrlsResponse'
+        '400':
+          description: Ошибка в параметрах запроса
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: Не авторизован
+          $ref: '#/components/responses/Unauthorized'
+
+  # 5. POST /favorites/{articleId}/comments - добавить комментарий
+  # 6. GET /favorites/{articleId}/comments - получить комментарии к статье
+  /favorites/{articleId}/comments:
+    post:
+      summary: Добавить комментарий к избранной статье
+      description: |
+        Создает новый комментарий к избранной статье пользователя.
+        
+        Требования:
+        - Статья должна быть в избранном пользователя
+        - Текст комментария не может быть пустым
+        - Комментарии видны только автору комментария
+      parameters:
+        - name: articleId
+          in: path
+          required: true
+          description: ID избранной статьи
+          schema:
+            type: integer
+            example: 42
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommentCreate'
+            examples:
+              create_comment:
+                summary: Создать комментарий
+                value:
+                  user_id: 123
+                  text: "Это интересная статья!"
+      responses:
+        '201':
+          description: Комментарий успешно создан
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommentResponse'
+        '400':
+          description: Ошибка в данных запроса
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: Не авторизован
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Статья не найдена в избранном пользователя
+          $ref: '#/components/responses/NotFound'
+    get:
+      summary: Получить комментарии к избранной статье
+      description: |
+        Возвращает список всех комментариев пользователя к указанной избранной статье
+        с поддержкой пагинации.
+      parameters:
+        - name: articleId
+          in: path
+          required: true
+          description: ID избранной статьи
+          schema:
+            type: integer
+            example: 42
+        - name: user_id
+          in: query
+          required: true
+          description: ID пользователя
+          schema:
+            type: integer
+            example: 123
+        - name: page
+          in: query
+          required: false
+          description: Номер страницы (начиная с 1)
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+            example: 1
+        - name: size
+          in: query
+          required: false
+          description: Количество элементов на странице
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+            example: 10
+      responses:
+        '200':
+          description: Успешный ответ со списком комментариев
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommentList'
+        '400':
+          description: Ошибка в параметрах запроса
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: Не авторизован
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Статья не найдена в избранном пользователя
+          $ref: '#/components/responses/NotFound'
+
+  # 7. PUT /comments/{commentId} - редактировать комментарий
+  # 8. DELETE /comments/{commentId} - удалить комментарий
+  /comments/{commentId}:
+    put:
+      summary: Редактировать комментарий
+      description: |
+        Обновляет текст существующего комментария пользователя.
+        
+        Требования:
+        - Комментарий должен принадлежать указанному пользователю
+        - Текст комментария не может быть пустым
+      parameters:
+        - name: commentId
+          in: path
+          required: true
+          description: ID комментария
+          schema:
+            type: integer
+            example: 15
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommentUpdate'
+            examples:
+              update_comment:
+                summary: Обновить комментарий
+                value:
+                  user_id: 123
+                  text: "Обновленный текст комментария"
+      responses:
+        '200':
+          description: Комментарий успешно обновлен
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommentResponse'
+        '400':
+          description: Ошибка в данных запроса
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: Не авторизован
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Доступ запрещен (комментарий принадлежит другому пользователю)
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Комментарий не найден
+          $ref: '#/components/responses/NotFound'
+    delete:
+      summary: Удалить комментарий
+      description: |
+        Удаляет комментарий пользователя.
+        
+        Требования:
+        - Комментарий должен принадлежать указанному пользователю
+      parameters:
+        - name: commentId
+          in: path
+          required: true
+          description: ID комментария
+          schema:
+            type: integer
+            example: 15
+        - name: user_id
+          in: query
+          required: true
+          description: ID пользователя
+          schema:
+            type: integer
+            example: 123
+      responses:
+        '200':
+          description: Комментарий успешно удален
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+        '401':
+          description: Не авторизован
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Доступ запрещен (комментарий принадлежит другому пользователю)
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Комментарий не найден
+          $ref: '#/components/responses/NotFound'
+
+components:
+  schemas:
+    # Модель избранной статьи
+    FavoriteArticle:
+      type: object
+      description: Избранная статья пользователя
+      properties:
+        id:
+          type: integer
+          description: Уникальный идентификатор записи в избранном
+          example: 42
+        user_id:
+          type: integer
+          description: ID пользователя
+          example: 123
+        url:
+          type: string
+          format: uri
+          description: URL статьи
+          example: "https://lenta.ru/news/2025/03/01/example/"
+        title:
+          type: string
+          description: Заголовок статьи
+          example: "Заголовок новости"
+        description:
+          type: string
+          description: Описание/краткое содержание статьи
+          example: "Описание новости"
+        url_to_image:
+          type: string
+          format: uri
+          nullable: true
+          description: URL изображения статьи
+          example: "https://example.com/image.jpg"
+        source_name:
+          type: string
+          description: Название источника новости
+          example: "Lenta.ru"
+        published_at:
+          type: string
+          format: date-time
+          description: Дата публикации статьи (ISO 8601)
+          example: "2025-03-01T18:00:00Z"
+        added_at:
+          type: string
+          format: date-time
+          description: Дата добавления в избранное (ISO 8601)
+          example: "2025-03-01T19:00:00Z"
+        note:
+          type: string
+          nullable: true
+          description: Личная заметка пользователя
+          example: "Важно прочитать позже"
+      required:
+        - id
+        - user_id
+        - url
+        - title
+        - source_name
+        - published_at
+        - added_at
+
+    # Запрос на toggle избранного
+    FavoriteToggleRequest:
+      type: object
+      description: Данные для добавления/удаления статьи из избранного
+      properties:
+        user_id:
+          type: integer
+          description: ID пользователя
+          example: 123
+        url:
+          type: string
+          format: uri
+          description: URL статьи (обязательно)
+          example: "https://lenta.ru/news/2025/03/01/example/"
+        title:
+          type: string
+          description: Заголовок статьи
+          example: "Заголовок новости"
+        description:
+          type: string
+          description: Описание статьи
+          example: "Описание новости"
+        url_to_image:
+          type: string
+          format: uri
+          nullable: true
+          description: URL изображения статьи
+          example: "https://example.com/image.jpg"
+        source_name:
+          type: string
+          description: Название источника новости
+          example: "Lenta.ru"
+        published_at:
+          type: string
+          format: date-time
+          description: Дата публикации статьи (ISO 8601)
+          example: "2025-03-01T18:00:00Z"
+      required:
+        - user_id
+        - url
+
+    # Ответ на toggle избранного
+    FavoriteToggleResponse:
+      type: object
+      description: Результат операции добавления/удаления из избранного
+      properties:
+        success:
+          type: boolean
+          example: true
+        is_favorite:
+          type: boolean
+          description: "Текущее состояние: true если статья в избранном, false если удалена"
+          example: true
+        action:
+          type: string
+          enum: [added, removed]
+          description: Действие, которое было выполнено
+          example: "added"
+      required:
+        - success
+        - is_favorite
+        - action
+
+    # Ответ на проверку избранного
+    FavoriteCheckResponse:
+      type: object
+      description: Результат проверки наличия статьи в избранном
+      properties:
+        is_favorite:
+          type: boolean
+          description: "true если статья в избранном, false если нет"
+          example: true
+        article_id:
+          type: integer
+          nullable: true
+          description: ID записи в избранном (если статья в избранном)
+          example: 42
+      required:
+        - is_favorite
+        - article_id
+
+    # Ответ со списком URL избранных статей
+    FavoriteUrlsResponse:
+      type: object
+      description: Список URL избранных статей пользователя
+      properties:
+        user_id:
+          type: integer
+          description: ID пользователя
+          example: 123
+        urls:
+          type: array
+          description: Массив URL избранных статей
+          items:
+            type: string
+            format: uri
+          example:
+            - "https://lenta.ru/news/2025/03/01/example1/"
+            - "https://lenta.ru/news/2025/03/01/example2/"
+        total:
+          type: integer
+          description: Общее количество избранных статей
+          example: 2
+      required:
+        - user_id
+        - urls
+        - total
+
+    # Список избранных статей с пагинацией
+    FavoriteList:
+      type: object
+      description: Список избранных статей с пагинацией
+      properties:
+        items:
+          type: array
+          description: Массив избранных статей
+          items:
+            type: object
+            allOf:
+              - $ref: '#/components/schemas/FavoriteArticle'
+              - type: object
+                properties:
+                  comments:
+                    type: array
+                    description: Комментарии к статье (если include_comments=true)
+                    items:
+                      $ref: '#/components/schemas/Comment'
+        total:
+          type: integer
+          description: Общее количество избранных статей (без учёта пагинации)
+          example: 42
+        page:
+          type: integer
+          description: Номер текущей страницы
+          example: 1
+        size:
+          type: integer
+          description: Размер страницы
+          example: 10
+      required:
+        - items
+        - total
+        - page
+        - size
+
+    # Модель комментария
+    Comment:
+      type: object
+      description: Комментарий к избранной статье
+      properties:
+        id:
+          type: integer
+          description: Уникальный идентификатор комментария
+          example: 15
+        article_id:
+          type: integer
+          description: ID избранной статьи
+          example: 42
+        user_id:
+          type: integer
+          description: ID автора комментария
+          example: 123
+        text:
+          type: string
+          description: Текст комментария
+          example: "Это интересная статья!"
+        created_at:
+          type: string
+          format: date-time
+          description: Дата создания комментария (ISO 8601)
+          example: "2025-03-01T20:00:00Z"
+      required:
+        - id
+        - article_id
+        - user_id
+        - text
+        - created_at
+
+    # Запрос на создание комментария
+    CommentCreate:
+      type: object
+      description: Данные для создания комментария
+      properties:
+        user_id:
+          type: integer
+          description: ID пользователя
+          example: 123
+        text:
+          type: string
+          description: Текст комментария
+          example: "Это интересная статья!"
+      required:
+        - user_id
+        - text
+
+    # Запрос на обновление комментария
+    CommentUpdate:
+      type: object
+      description: Данные для обновления комментария
+      properties:
+        user_id:
+          type: integer
+          description: ID пользователя
+          example: 123
+        text:
+          type: string
+          description: Новый текст комментария
+          example: "Обновленный текст комментария"
+      required:
+        - user_id
+        - text
+
+    # Ответ с комментарием
+    CommentResponse:
+      type: object
+      description: Ответ с данными комментария
+      properties:
+        success:
+          type: boolean
+          example: true
+        comment:
+          $ref: '#/components/schemas/Comment'
+      required:
+        - success
+        - comment
+
+    # Список комментариев с пагинацией
+    CommentList:
+      type: object
+      description: Список комментариев с пагинацией
+      properties:
+        items:
+          type: array
+          description: Массив комментариев
+          items:
+            $ref: '#/components/schemas/Comment'
+        total:
+          type: integer
+          description: Общее количество комментариев (без учёта пагинации)
+          example: 5
+        page:
+          type: integer
+          description: Номер текущей страницы
+          example: 1
+        size:
+          type: integer
+          description: Размер страницы
+          example: 10
+      required:
+        - items
+        - total
+        - page
+        - size
+
+  # Переиспользуемые ответы с ошибками
+  responses:
+    BadRequest:
+      description: Ошибка в запросе (некорректные данные)
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                description: Описание ошибки для человека
+                example: "URL статьи не указан"
+              code:
+                type: integer
+                description: Код ошибки
+                example: 400
+              details:
+                type: object
+                description: Детальная информация об ошибках валидации
+                additionalProperties: true
+                example:
+                  url: ["Обязательное поле"]
+                  text: ["Текст комментария не может быть пустым"]
+    NotFound:
+      description: Ресурс не найден
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                description: Описание ошибки
+                example: "Статья не найдена в избранном пользователя"
+              code:
+                type: integer
+                example: 404
+    Unauthorized:
+      description: Не авторизован (требуется аутентификация)
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                example: "Требуется аутентификация"
+              code:
+                type: integer
+                example: 401
+    Forbidden:
+      description: Доступ запрещён (недостаточно прав)
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                example: "Комментарий принадлежит другому пользователю"
+              code:
+                type: integer
+                example: 403
