@@ -1,0 +1,564 @@
+openapi: 3.0.0
+info:
+  title: Feed Service API
+  description: |
+    Микросервис для управления новостями из RSS-лент.
+    
+    Сервис отвечает за:
+    - Парсинг RSS-лент по категориям (Россия, Мир, Экономика, Наука, Спорт, Культура)
+    - Кеширование новостей в базе данных
+    - Поиск и фильтрацию новостей
+    - Предоставление ленты для главной страницы
+    
+    Особенности:
+    - Каждая новость уникальна по URL
+    - Новости хранятся с метаданными (заголовок, описание, изображение, источник, дата)
+    - Поддержка полнотекстового поиска по заголовку и описанию
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:8000
+    description: Локальный сервер для разработки (рекомендуемый порт для микросервиса Feed)
+  - url: http://feed-service:8000
+    description: Внутреннее имя сервиса в Docker-сети
+
+paths:
+  # 1. GET /feed - получить ленту новостей
+  /feed:
+    get:
+      summary: Получить ленту новостей
+      description: |
+        Возвращает список новостей с поддержкой фильтрации по категории,
+        поиска по ключевым словам и пагинации.
+        
+        Если новости в категории устарели, сервис может вернуть кешированные данные
+        и инициировать фоновое обновление.
+      parameters:
+        - name: category
+          in: query
+          required: false
+          description: Фильтр по категории (список категорий можно получить из /categories)
+          schema:
+            type: string
+            enum: [россия, мир, экономика, наука, спорт, культура]
+            example: "спорт"
+        - name: q
+          in: query
+          required: false
+          description: Поисковый запрос (поиск по заголовку и описанию)
+          schema:
+            type: string
+            example: "путин"
+        - name: page
+          in: query
+          required: false
+          description: Номер страницы (начиная с 1)
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+            example: 1
+        - name: size
+          in: query
+          required: false
+          description: Количество элементов на странице
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+            example: 20
+      responses:
+        '200':
+          description: Успешный ответ со списком новостей
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NewsList'
+              examples:
+                first_page:
+                  summary: Первая страница новостей
+                  value:
+                    items: [
+                      {
+                        "url": "https://lenta.ru/news/2025/03/01/example1/",
+                        "title": "Путин подписал новый закон",
+                        "description": "Президент России подписал закон о...",
+                        "image_url": "https://icdn.lenta.ru/images/2025/03/01/123.jpg",
+                        "source_name": "Lenta.ru",
+                        "published_at": "2025-03-01T18:00:00Z",
+                        "category": "россия"
+                      },
+                      {
+                        "url": "https://lenta.ru/news/2025/03/01/example2/",
+                        "title": "Сборная России выиграла золото",
+                        "description": "Российские спортсмены завоевали золотые медали...",
+                        "image_url": "https://icdn.lenta.ru/images/2025/03/01/456.jpg",
+                        "source_name": "Lenta.ru",
+                        "published_at": "2025-03-01T17:30:00Z",
+                        "category": "спорт"
+                      }
+                    ]
+                    total: 145
+                    page: 1
+                    size: 20
+        '400':
+          description: Ошибка в параметрах запроса
+          $ref: '#/components/responses/BadRequest'
+
+  # 2. GET /news/{url} - получить конкретную новость по URL
+  /news/{url}:
+    get:
+      summary: Получить новость по URL
+      description: |
+        Возвращает полные данные новости по её URL.
+        Используется для проверки существования новости и получения её метаданных.
+      parameters:
+        - name: url
+          in: path
+          required: true
+          description: URL статьи (URL-encoded при необходимости)
+          schema:
+            type: string
+            example: "https://lenta.ru/news/2025/03/01/example/"
+      responses:
+        '200':
+          description: Новость найдена
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NewsItem'
+              examples:
+                found:
+                  summary: Найденная новость
+                  value:
+                    url: "https://lenta.ru/news/2025/03/01/example/"
+                    title: "Заголовок новости"
+                    description: "Описание новости"
+                    image_url: "https://icdn.lenta.ru/images/2025/03/01/123.jpg"
+                    source_name: "Lenta.ru"
+                    published_at: "2025-03-01T18:00:00Z"
+                    category: "россия"
+        '400':
+          description: Ошибка в параметрах запроса
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          description: Новость не найдена
+          $ref: '#/components/responses/NotFound'
+
+  # 3. GET /categories - получить список категорий
+  /categories:
+    get:
+      summary: Получить список доступных категорий
+      description: |
+        Возвращает список всех категорий новостей, которые поддерживает сервис.
+      responses:
+        '200':
+          description: Успешный ответ со списком категорий
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  categories:
+                    type: array
+                    description: Массив категорий новостей
+                    items:
+                      type: string
+                      enum: [россия, мир, экономика, наука, спорт, культура]
+                    example: ["россия", "мир", "экономика", "наука", "спорт", "культура"]
+                  total:
+                    type: integer
+                    description: Общее количество категорий
+                    example: 6
+              examples:
+                default:
+                  value:
+                    categories: ["россия", "мир", "экономика", "наука", "спорт", "культура"]
+                    total: 6
+
+  # 4. GET /feed/latest - получить самые свежие новости
+  /feed/latest:
+    get:
+      summary: Получить самые свежие новости
+      description: |
+        Возвращает последние N новостей без пагинации.
+        Используется для виджетов и быстрой загрузки главной страницы.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Количество новостей (максимум 50)
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 10
+            example: 5
+      responses:
+        '200':
+          description: Успешный ответ со списком свежих новостей
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/NewsItem'
+              examples:
+                latest_five:
+                  summary: Последние 5 новостей
+                  value: [
+                    {
+                      "url": "https://lenta.ru/news/2025/03/01/latest1/",
+                      "title": "Срочная новость 1",
+                      "description": "Описание...",
+                      "image_url": "https://icdn.lenta.ru/images/1.jpg",
+                      "source_name": "Lenta.ru",
+                      "published_at": "2025-03-01T18:05:00Z",
+                      "category": "мир"
+                    }
+                  ]
+        '400':
+          description: Ошибка в параметрах запроса
+          $ref: '#/components/responses/BadRequest'
+
+  # 5. POST /feed/update-category (внутренний)
+  /feed/update-category:
+    post:
+      summary: Обновить новости в категории
+      description: |
+        Внутренний эндпоинт для запуска обновления RSS-ленты по конкретной категории.
+        Должен вызываться с внутренним токеном аутентификации.
+      parameters:
+        - name: X-Internal-Token
+          in: header
+          required: true
+          schema:
+            type: string
+            example: "secret-token-123"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                category:
+                  type: string
+                  enum: [россия, мир, экономика, наука, спорт, культура]
+                  description: Категория для обновления
+                  example: "спорт"
+                force:
+                  type: boolean
+                  description: Принудительное обновление даже если новости свежие
+                  default: false
+                  example: false
+              required:
+                - category
+      responses:
+        '200':
+          description: Обновление запущено успешно
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  category:
+                    type: string
+                    example: "спорт"
+                  articles_fetched:
+                    type: integer
+                    description: Всего получено статей из RSS
+                    example: 30
+                  new_articles:
+                    type: integer
+                    description: Новых статей добавлено в БД
+                    example: 12
+                  updated_articles:
+                    type: integer
+                    description: Существующих статей обновлено
+                    example: 3
+                  duration_ms:
+                    type: integer
+                    description: Время выполнения в миллисекундах
+                    example: 3450
+        '400':
+          description: Ошибка в данных запроса
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: Неверный внутренний токен
+          $ref: '#/components/responses/Unauthorized'
+
+  # 6. POST /feed/update-all (внутренний)
+  /feed/update-all:
+    post:
+      summary: Обновить все категории
+      description: |
+        Внутренний эндпоинт для массового обновления всех RSS-лент.
+        Рекомендуется вызывать по расписанию (cron/Celery) раз в 5-10 минут.
+      parameters:
+        - name: X-Internal-Token
+          in: header
+          required: true
+          schema:
+            type: string
+            example: "secret-token-123"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                force:
+                  type: boolean
+                  description: Принудительное обновление всех категорий
+                  default: false
+                  example: false
+      responses:
+        '200':
+          description: Обновление всех категорий запущено
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: object
+                    description: Результаты по каждой категории
+                    additionalProperties:
+                      type: object
+                      properties:
+                        new:
+                          type: integer
+                          example: 15
+                        updated:
+                          type: integer
+                          example: 3
+                        total:
+                          type: integer
+                          example: 87
+                    example:
+                      россия: {"new": 15, "updated": 3, "total": 87}
+                      мир: {"new": 8, "updated": 2, "total": 92}
+                      экономика: {"new": 3, "updated": 1, "total": 45}
+                  total_duration_ms:
+                    type: integer
+                    example: 18700
+        '401':
+          description: Неверный внутренний токен
+          $ref: '#/components/responses/Unauthorized'
+
+  # 7. GET /health - проверка здоровья сервиса
+  /health:
+    get:
+      summary: Проверка состояния сервиса
+      description: |
+        Эндпоинт для мониторинга и проверки.
+        Возвращает статус сервиса и его зависимостей.
+      responses:
+        '200':
+          description: Сервис работает нормально
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [healthy, degraded, unhealthy]
+                    example: "healthy"
+                  timestamp:
+                    type: string
+                    format: date-time
+                    example: "2025-03-01T18:00:00Z"
+                  services:
+                    type: object
+                    properties:
+                      database:
+                        type: string
+                        enum: [ok, error]
+                        example: "ok"
+                      rss_fetcher:
+                        type: string
+                        enum: [ok, error]
+                        example: "ok"
+                  stats:
+                    type: object
+                    properties:
+                      total_news_items:
+                        type: integer
+                        example: 15423
+                      last_update:
+                        type: string
+                        format: date-time
+                        example: "2025-03-01T17:45:00Z"
+              examples:
+                healthy:
+                  value:
+                    status: "healthy"
+                    timestamp: "2025-03-01T18:00:00Z"
+                    services:
+                      database: "ok"
+                      rss_fetcher: "ok"
+                    stats:
+                      total_news_items: 15423
+                      last_update: "2025-03-01T17:45:00Z"
+                degraded:
+                  value:
+                    status: "degraded"
+                    timestamp: "2025-03-01T18:00:00Z"
+                    services:
+                      database: "ok"
+                      rss_fetcher: "error"
+                    stats:
+                      total_news_items: 15423
+                      last_update: "2025-03-01T17:45:00Z"
+
+components:
+  schemas:
+    # Модель новости
+    NewsItem:
+      type: object
+      description: Полная модель новости из RSS-ленты
+      properties:
+        url:
+          type: string
+          format: uri
+          description: Уникальный URL статьи (используется как идентификатор)
+          example: "https://lenta.ru/news/2025/03/01/example/"
+        title:
+          type: string
+          description: Заголовок новости
+          example: "Заголовок новости"
+        description:
+          type: string
+          description: Описание/краткое содержание новости
+          example: "Описание новости"
+        image_url:
+          type: string
+          format: uri
+          nullable: true
+          description: URL изображения к новости
+          example: "https://icdn.lenta.ru/images/2025/03/01/123.jpg"
+        source_name:
+          type: string
+          description: Название источника (всегда "Lenta.ru")
+          example: "Lenta.ru"
+        published_at:
+          type: string
+          format: date-time
+          description: Дата публикации статьи (ISO 8601)
+          example: "2025-03-01T18:00:00Z"
+        category:
+          type: string
+          description: Категория новости
+          enum: [россия, мир, экономика, наука, спорт, культура]
+          example: "россия"
+      required:
+        - url
+        - title
+        - source_name
+        - published_at
+        - category
+
+    # Список новостей с пагинацией
+    NewsList:
+      type: object
+      description: Список новостей с пагинацией
+      properties:
+        items:
+          type: array
+          description: Массив новостей
+          items:
+            $ref: '#/components/schemas/NewsItem'
+        total:
+          type: integer
+          description: Общее количество новостей (без учёта пагинации)
+          example: 145
+        page:
+          type: integer
+          description: Номер текущей страницы
+          example: 1
+        size:
+          type: integer
+          description: Размер страницы
+          example: 20
+      required:
+        - items
+        - total
+        - page
+        - size
+
+  # Переиспользуемые ответы с ошибками
+  responses:
+    BadRequest:
+      description: Ошибка в запросе (некорректные данные)
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                description: Описание ошибки для человека
+                example: "Некорректные данные: параметр page должен быть положительным числом"
+              code:
+                type: integer
+                description: Код ошибки
+                example: 400
+              details:
+                type: object
+                description: Детальная информация об ошибках валидации
+                additionalProperties: true
+                example:
+                  category: ["Допустимые значения: россия, мир, экономика, наука, спорт, культура"]
+                  page: ["Значение должно быть больше или равно 1"]
+
+    NotFound:
+      description: Ресурс не найден
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                description: Описание ошибки
+                example: "Новость с указанным URL не найдена"
+              code:
+                type: integer
+                description: Код ошибки
+                example: 404
+
+    Unauthorized:
+      description: Не авторизован (требуется внутренний токен)
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                description: Описание ошибки
+                example: "Неверный или отсутствующий внутренний токен"
+              code:
+                type: integer
+                description: Код ошибки
+                example: 401
+
+    InternalServerError:
+      description: Внутренняя ошибка сервера
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                description: Описание ошибки
+                example: "Внутренняя ошибка сервера при парсинге RSS"
+              code:
+                type: integer
+                description: Код ошибки
+                example: 500
