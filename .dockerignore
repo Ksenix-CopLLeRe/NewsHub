@@ -1,0 +1,12 @@
+__pycache__
+*.py[cod]
+*.log
+.DS_Store
+.env
+.venv
+venv
+.git
+.gitignore
+.cursor
+terminals
+
