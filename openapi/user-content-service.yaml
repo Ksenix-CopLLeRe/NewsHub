@@ -3,14 +3,14 @@ info:
   title: User Content Service API
   description: |
     Микросервис для управления персональными данными пользователя вокруг статей.
-    
+
     Сервис отвечает за:
     - Избранное (toggle по URL) - добавление и удаление статей из избранного пользователя
     - Комментарии к избранному - создание, редактирование и удаление комментариев к сохраненным статьям
     - Проверки «статья есть в избранном пользователя» для комментариев
-    
+
     База данных: отдельная БД с таблицами favorite_articles и comments.
-    
+
     Особенности:
     - Каждый пользователь может добавить статью в избранное только один раз (уникальность по user_id и url)
     - Комментарии можно оставлять только к статьям, которые есть в избранном пользователя
@@ -30,7 +30,7 @@ paths:
       summary: Добавить или удалить статью из избранного
       description: |
         Переключает состояние статьи в избранном пользователя (toggle).
-        
+
         Особенности работы:
         - Если статья НЕ в избранном - добавляет её
         - Если статья УЖЕ в избранном - удаляет её
@@ -41,7 +41,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/FavoriteToggleRequest'
+              $ref: "#/components/schemas/FavoriteToggleRequest"
             examples:
               add_to_favorites:
                 summary: Добавить статью в избранное
@@ -54,12 +54,12 @@ paths:
                   source_name: "Lenta.ru"
                   published_at: "2025-03-01T18:00:00Z"
       responses:
-        '200':
+        "200":
           description: Статус избранного успешно изменен
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/FavoriteToggleResponse'
+                $ref: "#/components/schemas/FavoriteToggleResponse"
               examples:
                 added:
                   summary: Статья добавлена в избранное
@@ -73,12 +73,12 @@ paths:
                     success: true
                     is_favorite: false
                     action: "removed"
-        '400':
+        "400":
           description: Ошибка в данных запроса
-          $ref: '#/components/responses/BadRequest'
-        '401':
+          $ref: "#/components/responses/BadRequest"
+        "401":
           description: Не авторизован
-          $ref: '#/components/responses/Unauthorized'
+          $ref: "#/components/responses/Unauthorized"
 
   # 2. GET /favorites - получить список избранного пользователя
   /favorites:
@@ -123,18 +123,18 @@ paths:
             default: 10
             example: 10
       responses:
-        '200':
+        "200":
           description: Успешный ответ со списком избранных статей
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/FavoriteList'
-        '400':
+                $ref: "#/components/schemas/FavoriteList"
+        "400":
           description: Ошибка в параметрах запроса
-          $ref: '#/components/responses/BadRequest'
-        '401':
+          $ref: "#/components/responses/BadRequest"
+        "401":
           description: Не авторизован
-          $ref: '#/components/responses/Unauthorized'
+          $ref: "#/components/responses/Unauthorized"
 
   # 3. GET /favorites/check/{url} - проверить, есть ли статья в избранном
   /favorites/check/{url}:
@@ -160,12 +160,12 @@ paths:
             type: integer
             example: 123
       responses:
-        '200':
+        "200":
           description: Результат проверки
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/FavoriteCheckResponse'
+                $ref: "#/components/schemas/FavoriteCheckResponse"
               examples:
                 is_favorite:
                   summary: Статья в избранном
@@ -177,12 +177,12 @@ paths:
                   value:
                     is_favorite: false
                     article_id: null
-        '400':
+        "400":
           description: Ошибка в параметрах запроса
-          $ref: '#/components/responses/BadRequest'
-        '401':
+          $ref: "#/components/responses/BadRequest"
+        "401":
           description: Не авторизован
-          $ref: '#/components/responses/Unauthorized'
+          $ref: "#/components/responses/Unauthorized"
 
   # 4. GET /favorites/urls - получить список URL избранных статей
   /favorites/urls:
@@ -200,18 +200,18 @@ paths:
             type: integer
             example: 123
       responses:
-        '200':
+        "200":
           description: Успешный ответ со списком URL
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/FavoriteUrlsResponse'
-        '400':
+                $ref: "#/components/schemas/FavoriteUrlsResponse"
+        "400":
           description: Ошибка в параметрах запроса
-          $ref: '#/components/responses/BadRequest'
-        '401':
+          $ref: "#/components/responses/BadRequest"
+        "401":
           description: Не авторизован
-          $ref: '#/components/responses/Unauthorized'
+          $ref: "#/components/responses/Unauthorized"
 
   # 5. POST /favorites/{articleId}/comments - добавить комментарий
   # 6. GET /favorites/{articleId}/comments - получить комментарии к статье
@@ -220,7 +220,7 @@ paths:
       summary: Добавить комментарий к избранной статье
       description: |
         Создает новый комментарий к избранной статье пользователя.
-        
+
         Требования:
         - Статья должна быть в избранном пользователя
         - Текст комментария не может быть пустым
@@ -238,7 +238,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CommentCreate'
+              $ref: "#/components/schemas/CommentCreate"
             examples:
               create_comment:
                 summary: Создать комментарий
@@ -246,21 +246,21 @@ paths:
                   user_id: 123
                   text: "Это интересная статья!"
       responses:
-        '201':
+        "201":
           description: Комментарий успешно создан
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/CommentResponse'
-        '400':
+                $ref: "#/components/schemas/CommentResponse"
+        "400":
           description: Ошибка в данных запроса
-          $ref: '#/components/responses/BadRequest'
-        '401':
+          $ref: "#/components/responses/BadRequest"
+        "401":
           description: Не авторизован
-          $ref: '#/components/responses/Unauthorized'
-        '404':
+          $ref: "#/components/responses/Unauthorized"
+        "404":
           description: Статья не найдена в избранном пользователя
-          $ref: '#/components/responses/NotFound'
+          $ref: "#/components/responses/NotFound"
     get:
       summary: Получить комментарии к избранной статье
       description: |
@@ -301,21 +301,21 @@ paths:
             default: 10
             example: 10
       responses:
-        '200':
+        "200":
           description: Успешный ответ со списком комментариев
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/CommentList'
-        '400':
+                $ref: "#/components/schemas/CommentList"
+        "400":
           description: Ошибка в параметрах запроса
-          $ref: '#/components/responses/BadRequest'
-        '401':
+          $ref: "#/components/responses/BadRequest"
+        "401":
           description: Не авторизован
-          $ref: '#/components/responses/Unauthorized'
-        '404':
+          $ref: "#/components/responses/Unauthorized"
+        "404":
           description: Статья не найдена в избранном пользователя
-          $ref: '#/components/responses/NotFound'
+          $ref: "#/components/responses/NotFound"
 
   # 7. PUT /comments/{commentId} - редактировать комментарий
   # 8. DELETE /comments/{commentId} - удалить комментарий
@@ -324,7 +324,7 @@ paths:
       summary: Редактировать комментарий
       description: |
         Обновляет текст существующего комментария пользователя.
-        
+
         Требования:
         - Комментарий должен принадлежать указанному пользователю
         - Текст комментария не может быть пустым
@@ -341,7 +341,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CommentUpdate'
+              $ref: "#/components/schemas/CommentUpdate"
             examples:
               update_comment:
                 summary: Обновить комментарий
@@ -349,29 +349,29 @@ paths:
                   user_id: 123
                   text: "Обновленный текст комментария"
       responses:
-        '200':
+        "200":
           description: Комментарий успешно обновлен
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/CommentResponse'
-        '400':
+                $ref: "#/components/schemas/CommentResponse"
+        "400":
           description: Ошибка в данных запроса
-          $ref: '#/components/responses/BadRequest'
-        '401':
+          $ref: "#/components/responses/BadRequest"
+        "401":
           description: Не авторизован
-          $ref: '#/components/responses/Unauthorized'
-        '403':
+          $ref: "#/components/responses/Unauthorized"
+        "403":
           description: Доступ запрещен (комментарий принадлежит другому пользователю)
-          $ref: '#/components/responses/Forbidden'
-        '404':
+          $ref: "#/components/responses/Forbidden"
+        "404":
           description: Комментарий не найден
-          $ref: '#/components/responses/NotFound'
+          $ref: "#/components/responses/NotFound"
     delete:
       summary: Удалить комментарий
       description: |
         Удаляет комментарий пользователя.
-        
+
         Требования:
         - Комментарий должен принадлежать указанному пользователю
       parameters:
@@ -390,7 +390,7 @@ paths:
             type: integer
             example: 123
       responses:
-        '200':
+        "200":
           description: Комментарий успешно удален
           content:
             application/json:
@@ -400,15 +400,15 @@ paths:
                   success:
                     type: boolean
                     example: true
-        '401':
+        "401":
           description: Не авторизован
-          $ref: '#/components/responses/Unauthorized'
-        '403':
+          $ref: "#/components/responses/Unauthorized"
+        "403":
           description: Доступ запрещен (комментарий принадлежит другому пользователю)
-          $ref: '#/components/responses/Forbidden'
-        '404':
+          $ref: "#/components/responses/Forbidden"
+        "404":
           description: Комментарий не найден
-          $ref: '#/components/responses/NotFound'
+          $ref: "#/components/responses/NotFound"
 
 components:
   schemas:
@@ -591,14 +591,14 @@ components:
           items:
             type: object
             allOf:
-              - $ref: '#/components/schemas/FavoriteArticle'
+              - $ref: "#/components/schemas/FavoriteArticle"
               - type: object
                 properties:
                   comments:
                     type: array
                     description: Комментарии к статье (если include_comments=true)
                     items:
-                      $ref: '#/components/schemas/Comment'
+                      $ref: "#/components/schemas/Comment"
         total:
           type: integer
           description: Общее количество избранных статей (без учёта пагинации)
@@ -693,7 +693,7 @@ components:
           type: boolean
           example: true
         comment:
-          $ref: '#/components/schemas/Comment'
+          $ref: "#/components/schemas/Comment"
       required:
         - success
         - comment
@@ -707,7 +707,7 @@ components:
           type: array
           description: Массив комментариев
           items:
-            $ref: '#/components/schemas/Comment'
+            $ref: "#/components/schemas/Comment"
         total:
           type: integer
           description: Общее количество комментариев (без учёта пагинации)
