@@ -88,7 +88,53 @@ paths:
           description: Конфликт - пользователь уже имеет реакцию на эту новость
           $ref: '#/components/responses/Conflict'
 
-  # 2. GET /reactions/news/{newsId} - получить все реакции на новость
+  # 2. DELETE /reactions/{reactionId} - удалить реакцию по ID
+  /reactions/{reactionId}:
+    delete:
+      summary: Удалить реакцию по ID
+      description: |
+        Удаляет конкретную реакцию по её идентификатору.
+        Только владелец реакции или администратор может удалить реакцию.
+      parameters:
+        - name: reactionId
+          in: path
+          required: true
+          description: Уникальный идентификатор реакции
+          schema:
+            type: integer
+            example: 42
+        - name: X-User-ID
+          in: header
+          required: true
+          description: ID пользователя, выполняющего запрос (для проверки прав)
+          schema:
+            type: integer
+            example: 123
+      responses:
+        '200':
+          description: Реакция успешно удалена
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: "Реакция успешно удалена"
+        '401':
+          description: Не авторизован (X-User-ID не предоставлен)
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Доступ запрещён (попытка удалить чужую реакцию)
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Реакция с указанным ID не найдена
+          $ref: '#/components/responses/NotFound'
+
+  # 3. GET /reactions/news/{newsId} - получить все реакции на новость
   /reactions/news/{newsId}:
     get:
       summary: Получить все реакции на конкретную новость
@@ -131,7 +177,7 @@ paths:
           description: Новость не найдена (нет ни одной реакции)
           $ref: '#/components/responses/NotFound'
 
-  # 3. GET /reactions/counts/{newsId} - получить агрегированные счетчики
+  # 4. GET /reactions/counts/{newsId} - получить агрегированные счетчики
   /reactions/counts/{newsId}:
     get:
       summary: Получить агрегированные счетчики реакций
