@@ -1,0 +1,11 @@
+version: "3.9"
+
+services:
+  user-content-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.user-content-service
+    container_name: user-content-service
+    ports:
+      - "8002:8002"
+
