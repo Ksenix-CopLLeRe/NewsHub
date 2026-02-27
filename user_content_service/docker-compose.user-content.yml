@@ -1,8 +1,15 @@
 services:
   user-content-service:
     build:
-      context: .
-      dockerfile: Dockerfile.user-content-service
+      context: ..
+      dockerfile: user_content_service/Dockerfile.user-content-service
     container_name: user-content-service
     ports:
       - "8002:8002"
+    volumes:
+      - user_content_db:/app/data
+    environment:
+      - DATABASE_URL=sqlite:////app/data/user_content.db
+
+volumes:
+  user_content_db:
