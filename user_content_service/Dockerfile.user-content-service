@@ -12,10 +12,8 @@ RUN pip install --no-cache-dir --upgrade pip
 COPY user_content_service/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Копируем только то, что нужно микросервису
-COPY mocks ./mocks
+# Копируем только то, что нужно микросервису (реальный сервис с SQLite, без моков)
 COPY user_content_service ./user_content_service
-COPY openapi/user-content-service.yaml ./openapi/user-content-service.yaml
 
 EXPOSE 8002
 
