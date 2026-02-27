@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   user-content-service:
     build:
@@ -8,4 +6,3 @@ services:
     container_name: user-content-service
     ports:
       - "8002:8002"
-
