@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict
 from datetime import datetime
 from enum import Enum
+from urllib.parse import unquote
 
 # ----- Перечисление типов реакций (как в спецификации) -----
 class ReactionType(str, Enum):
@@ -200,57 +201,55 @@ def delete_reaction(reaction_id: int, x_user_id: int = Header(...)):
     return {"success": True, "message": "Reaction deleted successfully"}
 
 
-@app.get("/reactions/news/{news_id}", response_model=ReactionList)
-def get_reactions_by_news(
-    news_id: str,
-    page: int = Query(1, ge=1, description="Номер страницы"),
-    size: int = Query(10, ge=1, le=100, description="Элементов на странице")
-):
-    """
-    Получить все реакции на конкретную новость (с пагинацией)
-    """
-    # Собираем все реакции для этой новости
+from urllib.parse import unquote
+
+@app.get("/reactions/news/{news_id:path}", response_model=ReactionList)
+def get_reactions_by_news(news_id: str, page: int = 1, size: int = 10):
     news_reactions = []
+
     if news_id in news_index:
-        for user_id, reaction_id in news_index[news_id].items():
+        for reaction_id in news_index[news_id].values():
             news_reactions.append(reactions_db[reaction_id])
-    
+
     total = len(news_reactions)
-    
-    # Пагинация
     start = (page - 1) * size
     end = start + size
-    paginated = news_reactions[start:end]
-    
+
     return ReactionList(
-        items=paginated,
+        items=news_reactions[start:end],
         total=total,
         page=page,
         size=size
     )
-
-
-@app.get("/reactions/counts/{news_id}", response_model=ReactionCounts)
+@app.get("/reactions/counts/{news_id:path}", response_model=ReactionCounts)
 def get_reaction_counts(news_id: str):
     """
-    Получить агрегированные счетчики реакций для новости
+    Получить агрегированные счетчики реакций по новости
     """
-    counts = {
-        ReactionType.important: 0,
-        ReactionType.interesting: 0,
-        ReactionType.shocking: 0,
-        ReactionType.useful: 0,
-        ReactionType.liked: 0
-    }
-    
-    total = 0
-    
-    if news_id in news_index:
-        for user_id, reaction_id in news_index[news_id].items():
-            reaction = reactions_db[reaction_id]
-            counts[reaction.reaction_type] += 1
-            total += 1
-    
+
+    # Если новости нет — возвращаем нули (а не 404)
+    if news_id not in news_index:
+        return ReactionCounts(
+            news_id=news_id,
+            counts={reaction_type: 0 for reaction_type in ReactionType},
+            total=0
+        )
+
+    # Собираем реакции по новости
+    reactions_for_news = [
+        reactions_db[reaction_id]
+        for reaction_id in news_index[news_id].values()
+    ]
+
+    # Инициализируем счетчики
+    counts = {reaction_type: 0 for reaction_type in ReactionType}
+
+    # Считаем
+    for reaction in reactions_for_news:
+        counts[reaction.reaction_type] += 1
+
+    total = len(reactions_for_news)
+
     return ReactionCounts(
         news_id=news_id,
         counts=counts,
