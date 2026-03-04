@@ -12,7 +12,7 @@ RUN pip install --no-cache-dir --upgrade pip
 COPY user_content_service/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Копируем только то, что нужно микросервису (реальный сервис с SQLite, без моков)
+# Копируем только то, что нужно микросервису
 COPY user_content_service ./user_content_service
 
 EXPOSE 8002
