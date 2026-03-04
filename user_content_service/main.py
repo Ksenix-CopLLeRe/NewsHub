@@ -59,8 +59,7 @@ def on_startup():
     init_db()
 
 
-# --- Эндпоинты избранного ---
-
+# Эндпоинты избранного
 
 @app.post("/favorites/toggle", response_model=FavoriteToggleResponse, tags=["favorites"])
 async def toggle_favorite(payload: FavoriteToggleRequest, db: Session = Depends(get_db)):
@@ -158,8 +157,7 @@ async def get_favorite_urls(
     return FavoriteUrlsResponse(user_id=user_id, urls=urls, total=len(urls))
 
 
-# --- Эндпоинты комментариев ---
-
+# Эндпоинты комментариев
 
 @app.post("/favorites/{articleId}/comments", response_model=CommentResponse, status_code=201, tags=["comments"])
 async def add_comment(

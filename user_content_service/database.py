@@ -7,7 +7,7 @@ import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 
-# По умолчанию: sqlite в текущей директории
+# sqlite в текущей директории
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "sqlite:///./user_content.db",

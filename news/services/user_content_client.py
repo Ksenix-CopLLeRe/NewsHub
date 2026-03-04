@@ -15,7 +15,7 @@ class LocalUserContentClient:
     В будущем может быть заменена на HTTP‑клиент к FastAPI‑сервису.
     """
 
-    # ----- Избранное -----
+    # Избранное
 
     def get_favorite_urls(self, user: User) -> Set[str]:
         return set(
@@ -91,7 +91,7 @@ class LocalUserContentClient:
 
         return {"success": True, "is_favorite": True, "status": 200}
 
-    # ----- Комментарии -----
+    # Комментарии
 
     def add_comment(
         self, user: User, article_id: int, text: str
