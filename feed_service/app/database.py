@@ -6,7 +6,6 @@ import os
 # Получаем URL БД из переменной окружения или используем по умолчанию
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./feed.db")
 
-# Для SQLite нужно добавить check_same_thread=False
 engine = create_engine(
     DATABASE_URL, 
     connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {}
