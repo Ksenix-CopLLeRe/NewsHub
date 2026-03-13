@@ -1,13 +1,20 @@
-from fastapi import FastAPI, Query, HTTPException, Header
+from fastapi import FastAPI, Query, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session
 from typing import Optional, List
 from datetime import datetime, timedelta
+from app import models, schemas, rss_parser, crud
+from app.database import SessionLocal, engine
+from app.rss_parser import RSS_FEEDS
+import threading
+import time
 import uvicorn
 import random
-import secrets
 
 # Секретный токен для внутренних эндпоинтов (в реальности хранится в .env)
 INTERNAL_TOKEN = "mock-internal-token-123456"
+
+models.Base.metadata.create_all(bind=engine)
 
 # Создаем приложение
 app = FastAPI(
@@ -15,6 +22,13 @@ app = FastAPI(
     description="Мок-сервер для тестирования Feed Service API",
     version="1.0.0"
 )
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 # Настройка CORS для тестирования из браузера
 app.add_middleware(
@@ -25,302 +39,186 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ============ МОК-ДАННЫЕ ============
-
-# Категории новостей
-CATEGORIES = ["россия", "мир", "экономика", "наука", "спорт", "культура"]
-
-# Функция для генерации мок-новостей
-def generate_mock_news(category: str = None, count: int = 20) -> List[dict]:
-    """Генерирует тестовые новости"""
-    news_items = []
-    
-    # Шаблоны для генерации
-    titles = {
-        "россия": [
-            "Путин подписал новый закон о развитии экономики",
-            "В Москве открылся международный форум",
-            "Госдума приняла важный законопроект",
-            "Российские ученые совершили прорыв в физике",
-            "Новые меры поддержки семей в России"
-        ],
-        "мир": [
-            "Трамп объявил о новых выборах в США",
-            "В Европе обсуждают климатические изменения",
-            "Китай запустил новую космическую станцию",
-            "Переговоры по Украине в Стамбуле",
-            "Саммит G7 начался в Германии"
-        ],
-        "экономика": [
-            "Курс доллара упал до минимума",
-            "Нефть подорожала на 5% за день",
-            "Инфляция в России замедлилась",
-            "Новые санкции против России",
-            "Биткоин обновил исторический максимум"
-        ],
-        "наука": [
-            "Ученые нашли лекарство от старения",
-            "NASA запустило миссию к Марсу",
-            "Российские физики получили Нобелевскую премию",
-            "Открыта новая планета в зоне обитаемости",
-            "Создан первый квантовый компьютер"
-        ],
-        "спорт": [
-            "Сборная России выиграла золото",
-            "Олимпиада в Париже открылась",
-            "Российский футболист перешел в Реал",
-            "Чемпионат мира по хоккею стартовал",
-            "Боксер Поветкин завершил карьеру"
-        ],
-        "культура": [
-            "Новый фильм Бондарчука вышел в прокат",
-            "Эрмитаж открыл выставку импрессионистов",
-            "Умер известный актер театра и кино",
-            "Концерт группы Руки Вверх! собрал стадион",
-            "Книга Пелевина стала бестселлером"
-        ]
-    }
-    
-    descriptions = [
-        "Эксперты отмечают, что это решение повлияет на...",
-        "Подробности этого события обсуждаются в мировых СМИ...",
-        "Аналитики прогнозируют дальнейшее развитие ситуации...",
-        "Это событие может кардинально изменить...",
-        "По словам очевидцев, происходящее вызывает..."
-    ]
-    
-    # Генерируем новости
-    for i in range(count):
-        # Выбираем категорию
-        news_category = category if category else random.choice(CATEGORIES)
-        
-        # Генерируем дату публикации (от текущей до 7 дней назад)
-        days_ago = random.randint(0, 7)
-        hours_ago = random.randint(0, 23)
-        minutes_ago = random.randint(0, 59)
-        published_at = datetime.now() - timedelta(
-            days=days_ago, 
-            hours=hours_ago, 
-            minutes=minutes_ago
-        )
-        
-        # Формируем новость
-        news_item = {
-            "url": f"https://lenta.ru/news/2025/03/{random.randint(1, 28):02d}/example{i}/",
-            "title": random.choice(titles.get(news_category, titles["россия"])),
-            "description": random.choice(descriptions),
-            "image_url": f"https://icdn.lenta.ru/images/2025/03/0{random.randint(1, 9)}/{random.randint(100, 999)}.jpg",
-            "source_name": "Lenta.ru",
-            "published_at": published_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "category": news_category
-        }
-        news_items.append(news_item)
-    
-    # Сортируем по дате (сначала свежие)
-    news_items.sort(key=lambda x: x["published_at"], reverse=True)
-    return news_items
-
-# Генерируем основную базу новостей (100 новостей)
-MOCK_NEWS = generate_mock_news(count=100)
-
 # ============ ПУБЛИЧНЫЕ ЭНДПОИНТЫ ============
 
-@app.get("/feed", tags=["public"])
-async def get_feed(
-    category: Optional[str] = Query(None, description="Фильтр по категории"),
-    q: Optional[str] = Query(None, description="Поисковый запрос"),
-    page: int = Query(1, ge=1, description="Номер страницы"),
-    size: int = Query(20, ge=1, le=100, description="Размер страницы")
-):
-    """
-    Получить ленту новостей с поддержкой фильтрации, поиска и пагинации.
+# @app.get("/feed", tags=["public"])
+# def get_feed(
+#     category: Optional[str] = Query(None, description="Фильтр по категории"),
+#     q: Optional[str] = Query(None, description="Поисковый запрос"),
+#     page: int = Query(1, ge=1, description="Номер страницы"),
+#     size: int = Query(20, ge=1, le=100, description="Размер страницы")
+# ):
+#     """
+#     Получить ленту новостей с поддержкой фильтрации, поиска и пагинации.
     
-    - **category**: фильтр по категории
-    - **q**: поиск по заголовку и описанию
-    - **page**: номер страницы (начиная с 1)
-    - **size**: количество элементов на странице (max 100)
-    """
-    # Фильтруем по категории
-    filtered_news = MOCK_NEWS
-    if category:
-        filtered_news = [n for n in filtered_news if n["category"] == category]
+#     - **category**: фильтр по категории
+#     - **q**: поиск по заголовку и описанию
+#     - **page**: номер страницы (начиная с 1)
+#     - **size**: количество элементов на странице (max 100)
+#     """
+#     # Фильтруем по категории
+#     filtered_news = MOCK_NEWS
+#     if category:
+#         filtered_news = [n for n in filtered_news if n["category"] == category]
     
-    # Поиск по тексту
-    if q:
-        q_lower = q.lower()
-        filtered_news = [
-            n for n in filtered_news 
-            if q_lower in n["title"].lower() or q_lower in n["description"].lower()
-        ]
+#     # Поиск по тексту
+#     if q:
+#         q_lower = q.lower()
+#         filtered_news = [
+#             n for n in filtered_news 
+#             if q_lower in n["title"].lower() or q_lower in n["description"].lower()
+#         ]
     
-    # Пагинация
-    total = len(filtered_news)
-    start = (page - 1) * size
-    end = start + size
-    paginated_news = filtered_news[start:end]
+#     # Пагинация
+#     total = len(filtered_news)
+#     start = (page - 1) * size
+#     end = start + size
+#     paginated_news = filtered_news[start:end]
     
-    return {
-        "items": paginated_news,
-        "total": total,
-        "page": page,
-        "size": size
-    }
+#     return {
+#         "items": paginated_news,
+#         "total": total,
+#         "page": page,
+#         "size": size
+#     }
 
-@app.get("/news/{url:path}", tags=["public"])
-async def get_news_by_url(url: str):
-    """
-    Получить конкретную новость по URL.
+# @app.get("/news/{url:path}", tags=["public"])
+# def get_news_by_url(url: str):
+#     """
+#     Получить конкретную новость по URL.
     
-    - **url**: URL статьи (URL-encoded)
-    """
-    # Ищем новость по URL
-    for news in MOCK_NEWS:
-        if news["url"] == url:
-            return news
+#     - **url**: URL статьи (URL-encoded)
+#     """
+#     # Ищем новость по URL
+#     for news in MOCK_NEWS:
+#         if news["url"] == url:
+#             return news
     
-    raise HTTPException(
-        status_code=404,
-        detail={
-            "error": f"Новость с URL {url} не найдена",
-            "code": 404
-        }
-    )
+#     raise HTTPException(
+#         status_code=404,
+#         detail={
+#             "error": f"Новость с URL {url} не найдена",
+#             "code": 404
+#         }
+#     )
 
-@app.get("/categories", tags=["public"])
-async def get_categories():
-    """
-    Получить список всех доступных категорий новостей.
-    """
-    return {
-        "categories": CATEGORIES,
-        "total": len(CATEGORIES)
-    }
+# @app.get("/categories", tags=["public"])
+# def get_categories(db: Session = Depends(get_db)):
+#     """
+#     Получить список всех доступных категорий новостей.
+#     """
+#     from sqlalchemy import func
 
-@app.get("/feed/latest", tags=["public"])
-async def get_latest_news(
-    limit: int = Query(10, ge=1, le=50, description="Количество новостей")
-):
-    """
-    Получить самые свежие новости (без пагинации).
+#     categories_list = list(RSS_FEEDS.keys())
+
+#     results = db.query(
+#         models.NewsItem.category,
+#         func.count(models.NewsItem.id).label('count')
+#     ).group_by(models.NewsItem.category).all()
     
-    - **limit**: количество новостей (max 50)
-    """
-    return MOCK_NEWS[:limit]
+#     counts = {cat: 0 for cat in categories_list}
+#     for cat, count in results:
+#         counts[cat] = count
+    
+#     return {
+#         "categories": categories_list,
+#         "counts": counts,
+#         "total": len(categories_list)
+#     }
+
+# @app.get("/feed/latest", tags=["public"])
+# def get_latest_news(
+#     limit: int = Query(10, ge=1, le=50, description="Количество новостей")
+# ):
+#     """
+#     Получить самые свежие новости (без пагинации).
+    
+#     - **limit**: количество новостей (max 50)
+#     """
+#     return MOCK_NEWS[:limit]
 
 # ============ ВНУТРЕННИЕ ЭНДПОИНТЫ ============
 
-@app.post("/internal/feed/update-category", tags=["internal"])
-async def update_category(
-    request: dict,
-    x_internal_token: str = Header(..., description="Внутренний токен для аутентификации")
-):
+@app.post("/rss/update/{category}")
+def update_category(category: str, db: Session = Depends(get_db)):
     """
-    [ВНУТРЕННИЙ] Обновить новости в конкретной категории.
-    
-    Вызывается только другими сервисами или по расписанию.
-    Требует внутренний токен аутентификации.
+    Обновить новости из RSS для конкретной категории
     """
-    # Проверка токена
-    if x_internal_token != INTERNAL_TOKEN:
-        raise HTTPException(
-            status_code=401,
-            detail={
-                "error": "Неверный внутренний токен",
-                "code": 401
-            }
-        )
-    
-    category = request.get("category")
-    force = request.get("force", False)
-    
-    if category not in CATEGORIES:
+    if category not in rss_parser.RSS_FEEDS:
         raise HTTPException(
             status_code=400,
-            detail={
-                "error": f"Категория '{category}' не найдена",
-                "code": 400,
-                "details": {
-                    "category": [f"Допустимые значения: {', '.join(CATEGORIES)}"]
-                }
-            }
+            detail={"error": f"Неизвестная категория: {category}", "code": 400}
         )
     
-    # Симулируем обновление RSS
-    new_count = random.randint(5, 20)
-    updated_count = random.randint(0, 10)
+    # Парсим RSS
+    news_items = rss_parser.parse_rss_feed(category)
+    
+    if not news_items:
+        return {
+            "category": category,
+            "status": "no news found",
+            "saved": 0
+        }
+    
+    # Сохраняем в БД
+    saved = crud.save_category_news(db, category, news_items)
     
     return {
         "category": category,
-        "articles_fetched": new_count + updated_count,
-        "new_articles": new_count,
-        "updated_articles": updated_count,
-        "duration_ms": random.randint(1000, 5000)
+        "status": "success",
+        "parsed": len(news_items),
+        "saved": saved
     }
 
-@app.post("/internal/feed/update-all", tags=["internal"])
-async def update_all_categories(
-    request: dict = None,
-    x_internal_token: str = Header(..., description="Внутренний токен для аутентификации")
-):
+@app.post("/rss/update-all")
+def update_all_categories(db: Session = Depends(get_db)):
     """
-    [ВНУТРЕННИЙ] Обновить все категории новостей.
-    
-    Вызывается по расписанию (например, каждые 5 минут).
-    Требует внутренний токен аутентификации.
+    Обновить все категории (может занять некоторое время)
     """
-    # Проверка токена
-    if x_internal_token != INTERNAL_TOKEN:
-        raise HTTPException(
-            status_code=401,
-            detail={
-                "error": "Неверный внутренний токен",
-                "code": 401
-            }
-        )
-    
-    force = request.get("force", False) if request else False
-    
-    # Симулируем обновление всех категорий
     results = {}
-    total_duration = 0
+    total_parsed = 0
+    total_saved = 0
     
-    for category in CATEGORIES:
-        new = random.randint(5, 15)
-        updated = random.randint(0, 8)
-        total_in_category = random.randint(50, 200)
-        duration = random.randint(500, 3000)
+    for category in rss_parser.RSS_FEEDS.keys():
+        news_items = rss_parser.parse_rss_feed(category)
+        total_parsed += len(news_items)
+        
+        saved = crud.save_category_news(db, category, news_items)
+        total_saved += saved
         
         results[category] = {
-            "new": new,
-            "updated": updated,
-            "total": total_in_category
+            "parsed": len(news_items),
+            "saved": saved
         }
-        total_duration += duration
+        
+        time.sleep(1)
     
     return {
-        "results": results,
-        "total_duration_ms": total_duration
+        "status": "success",
+        "total_parsed": total_parsed,
+        "total_saved": total_saved,
+        "results": results
     }
 
-@app.get("/internal/health", tags=["internal"])
-async def health_check():
-    """
-    [ВНУТРЕННИЙ] Проверка здоровья сервиса.
+# @app.get("/internal/health", tags=["internal"])
+# def health_check():
+#     """
+#     [ВНУТРЕННИЙ] Проверка здоровья сервиса.
     
-    Используется для мониторинга и оркестрации.
-    """
-    return {
-        "status": "healthy",
-        "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "services": {
-            "database": "ok",
-            "rss_fetcher": "ok"
-        },
-        "stats": {
-            "total_news_items": len(MOCK_NEWS),
-            "last_update": datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
-        }
-    }
+#     Используется для мониторинга и оркестрации.
+#     """
+#     return {
+#         "status": "healthy",
+#         "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ"),
+#         "services": {
+#             "database": "ok",
+#             "rss_fetcher": "ok"
+#         },
+#         "stats": {
+#             "total_news_items": len(MOCK_NEWS),
+#             "last_update": datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
+#         }
+#     }
 
 
 if __name__ == "__main__":
