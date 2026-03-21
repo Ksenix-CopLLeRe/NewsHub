@@ -22,14 +22,9 @@ class FavoriteArticle(Base):
     description = Column(Text, nullable=True)
     url_to_image = Column(String(2048), nullable=True)
     source_name = Column(String(256), nullable=False)
-    published_at = Column(DateTime, nullable=False)
-    added_at = Column(DateTime, nullable=False)
+    published_at = Column(DateTime(timezone=True), nullable=False)
+    added_at = Column(DateTime(timezone=True), nullable=False)
     note = Column(Text, nullable=True)
-
-    # Один user_id + url — одна запись
-    __table_args__ = (
-        {"sqlite_autoincrement": True},
-    )
 
     comments = relationship("Comment", back_populates="article", cascade="all, delete-orphan")
 
@@ -43,6 +38,6 @@ class Comment(Base):
     article_id = Column(Integer, ForeignKey("favorite_articles.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id = Column(Integer, nullable=False, index=True)
     text = Column(Text, nullable=False)
-    created_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False)
 
     article = relationship("FavoriteArticle", back_populates="comments")

@@ -1,7 +1,7 @@
 """
 User Content Service — микросервис избранного и комментариев.
 
-Работает с SQLite. Запуск:
+Полностью асинхронный (asyncpg + AsyncSession). Запуск:
 
     uvicorn user_content_service.main:app --reload --port 8002
 
@@ -14,8 +14,8 @@ from urllib.parse import unquote
 
 from fastapi import Depends, FastAPI, HTTPException, Path, Query
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from .database import get_db, init_db
 from .models import Comment as CommentModel
@@ -37,7 +37,7 @@ from .schemas import (
 
 app = FastAPI(
     title="User Content Service",
-    description="Микросервис управления избранным и комментариями к статьям.",
+    description="Асинхронный микросервис управления избранным и комментариями к статьям.",
     version="1.0.0",
 )
 
@@ -54,16 +54,24 @@ def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _to_utc(dt: datetime | None) -> datetime | None:
+    """Нормализует datetime в UTC (timezone-aware) для asyncpg."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
 @app.on_event("startup")
-def on_startup():
-    init_db()
+async def on_startup():
+    await init_db()
 
 
-# --- Эндпоинты избранного ---
-
+# Эндпоинты избранного
 
 @app.post("/favorites/toggle", response_model=FavoriteToggleResponse, tags=["favorites"])
-async def toggle_favorite(payload: FavoriteToggleRequest, db: Session = Depends(get_db)):
+async def toggle_favorite(payload: FavoriteToggleRequest, db: AsyncSession = Depends(get_db)):
     """Добавить или удалить статью из избранного (toggle)."""
     url_str = str(payload.url).strip()
     if not url_str:
@@ -72,17 +80,20 @@ async def toggle_favorite(payload: FavoriteToggleRequest, db: Session = Depends(
             detail={"error": "URL статьи не указан", "code": 400, "details": {"url": ["Обязательное поле"]}},
         )
 
-    existing = db.query(FavoriteArticleModel).filter(
-        FavoriteArticleModel.user_id == payload.user_id,
-        FavoriteArticleModel.url == url_str,
-    ).first()
+    result = await db.execute(
+        select(FavoriteArticleModel).where(
+            FavoriteArticleModel.user_id == payload.user_id,
+            FavoriteArticleModel.url == url_str,
+        )
+    )
+    existing = result.scalar_one_or_none()
 
     if existing:
         db.delete(existing)
-        db.commit()
+        await db.commit()
         return FavoriteToggleResponse(success=True, is_favorite=False, action="removed")
 
-    published_at = payload.published_at or _now_utc()
+    published_at = _to_utc(payload.published_at) or _now_utc()
     added_at = _now_utc()
 
     fav = FavoriteArticleModel(
@@ -97,8 +108,8 @@ async def toggle_favorite(payload: FavoriteToggleRequest, db: Session = Depends(
         note=None,
     )
     db.add(fav)
-    db.commit()
-    db.refresh(fav)
+    await db.commit()
+    await db.refresh(fav)
     return FavoriteToggleResponse(success=True, is_favorite=True, action="added")
 
 
@@ -108,21 +119,30 @@ async def get_favorites(
     include_comments: bool = Query(False, description="Включить комментарии к статьям"),
     page: int = Query(1, ge=1),
     size: int = Query(10, ge=1, le=100),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """Получить список избранных статей пользователя."""
-    query = db.query(FavoriteArticleModel).filter(FavoriteArticleModel.user_id == user_id)
-    total = query.count()
-    rows = query.order_by(FavoriteArticleModel.added_at.desc()).offset((page - 1) * size).limit(size).all()
+    stmt = (
+        select(FavoriteArticleModel)
+        .where(FavoriteArticleModel.user_id == user_id)
+        .order_by(FavoriteArticleModel.added_at.desc())
+    )
+    count_result = await db.execute(select(func.count()).select_from(FavoriteArticleModel).where(FavoriteArticleModel.user_id == user_id))
+    total = count_result.scalar() or 0
+
+    result = await db.execute(stmt.offset((page - 1) * size).limit(size))
+    rows = result.scalars().all()
 
     items: List[FavoriteWithComments] = []
     for row in rows:
         comments: List[Comment] = []
         if include_comments:
-            comment_rows = db.query(CommentModel).filter(
+            com_stmt = select(CommentModel).where(
                 CommentModel.article_id == row.id,
                 CommentModel.user_id == user_id,
-            ).all()
+            )
+            com_result = await db.execute(com_stmt)
+            comment_rows = com_result.scalars().all()
             comments = [Comment.model_validate(c) for c in comment_rows]
         fav = FavoriteArticle.model_validate(row)
         items.append(FavoriteWithComments(**fav.model_dump(), comments=comments))
@@ -134,14 +154,17 @@ async def get_favorites(
 async def check_favorite(
     url: str = Path(...),
     user_id: int = Query(...),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """Проверить наличие статьи в избранном пользователя."""
     url_decoded = unquote(url)
-    fav = db.query(FavoriteArticleModel).filter(
-        FavoriteArticleModel.user_id == user_id,
-        FavoriteArticleModel.url == url_decoded,
-    ).first()
+    result = await db.execute(
+        select(FavoriteArticleModel).where(
+            FavoriteArticleModel.user_id == user_id,
+            FavoriteArticleModel.url == url_decoded,
+        )
+    )
+    fav = result.scalar_one_or_none()
     if fav:
         return FavoriteCheckResponse(is_favorite=True, article_id=fav.id)
     return FavoriteCheckResponse(is_favorite=False, article_id=None)
@@ -150,28 +173,30 @@ async def check_favorite(
 @app.get("/favorites/urls", response_model=FavoriteUrlsResponse, tags=["favorites"])
 async def get_favorite_urls(
     user_id: int = Query(...),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """Получить список URL избранных статей пользователя."""
-    rows = db.query(FavoriteArticleModel.url).filter(FavoriteArticleModel.user_id == user_id).all()
-    urls = [r[0] for r in rows]
+    result = await db.execute(select(FavoriteArticleModel.url).where(FavoriteArticleModel.user_id == user_id))
+    urls = [r[0] for r in result.all()]
     return FavoriteUrlsResponse(user_id=user_id, urls=urls, total=len(urls))
 
 
-# --- Эндпоинты комментариев ---
-
+# Эндпоинты комментариев
 
 @app.post("/favorites/{articleId}/comments", response_model=CommentResponse, status_code=201, tags=["comments"])
 async def add_comment(
     articleId: int = Path(..., description="ID избранной статьи"),
     payload: CommentCreate = ...,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """Добавить комментарий к избранной статье."""
-    fav = db.query(FavoriteArticleModel).filter(
-        FavoriteArticleModel.id == articleId,
-        FavoriteArticleModel.user_id == payload.user_id,
-    ).first()
+    result = await db.execute(
+        select(FavoriteArticleModel).where(
+            FavoriteArticleModel.id == articleId,
+            FavoriteArticleModel.user_id == payload.user_id,
+        )
+    )
+    fav = result.scalar_one_or_none()
     if not fav:
         raise HTTPException(
             status_code=404,
@@ -194,8 +219,8 @@ async def add_comment(
         created_at=_now_utc(),
     )
     db.add(comment)
-    db.commit()
-    db.refresh(comment)
+    await db.commit()
+    await db.refresh(comment)
     return CommentResponse(success=True, comment=Comment.model_validate(comment))
 
 
@@ -205,25 +230,35 @@ async def get_comments(
     user_id: int = Query(...),
     page: int = Query(1, ge=1),
     size: int = Query(10, ge=1, le=100),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """Получить комментарии к избранной статье."""
-    fav = db.query(FavoriteArticleModel).filter(
-        FavoriteArticleModel.id == articleId,
-        FavoriteArticleModel.user_id == user_id,
-    ).first()
+    result = await db.execute(
+        select(FavoriteArticleModel).where(
+            FavoriteArticleModel.id == articleId,
+            FavoriteArticleModel.user_id == user_id,
+        )
+    )
+    fav = result.scalar_one_or_none()
     if not fav:
         raise HTTPException(
             status_code=404,
             detail={"error": "Статья не найдена в избранном пользователя", "code": 404},
         )
 
-    query = db.query(CommentModel).filter(
+    base_stmt = select(CommentModel).where(
         CommentModel.article_id == articleId,
         CommentModel.user_id == user_id,
     )
-    total = query.count()
-    rows = query.order_by(CommentModel.created_at.desc()).offset((page - 1) * size).limit(size).all()
+    count_result = await db.execute(select(func.count()).select_from(CommentModel).where(
+        CommentModel.article_id == articleId,
+        CommentModel.user_id == user_id,
+    ))
+    total = count_result.scalar() or 0
+
+    stmt = base_stmt.order_by(CommentModel.created_at.desc()).offset((page - 1) * size).limit(size)
+    result = await db.execute(stmt)
+    rows = result.scalars().all()
     return CommentList(
         items=[Comment.model_validate(r) for r in rows],
         total=total,
@@ -236,10 +271,11 @@ async def get_comments(
 async def edit_comment(
     commentId: int = Path(...),
     payload: CommentUpdate = ...,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """Редактировать комментарий."""
-    comment = db.query(CommentModel).filter(CommentModel.id == commentId).first()
+    result = await db.execute(select(CommentModel).where(CommentModel.id == commentId))
+    comment = result.scalar_one_or_none()
     if not comment:
         raise HTTPException(status_code=404, detail={"error": "Комментарий не найден", "code": 404})
     if comment.user_id != payload.user_id:
@@ -258,8 +294,8 @@ async def edit_comment(
         )
 
     comment.text = payload.text.strip()
-    db.commit()
-    db.refresh(comment)
+    await db.commit()
+    await db.refresh(comment)
     return CommentResponse(success=True, comment=Comment.model_validate(comment))
 
 
@@ -267,10 +303,11 @@ async def edit_comment(
 async def delete_comment(
     commentId: int = Path(...),
     user_id: int = Query(...),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     """Удалить комментарий."""
-    comment = db.query(CommentModel).filter(CommentModel.id == commentId).first()
+    result = await db.execute(select(CommentModel).where(CommentModel.id == commentId))
+    comment = result.scalar_one_or_none()
     if not comment:
         raise HTTPException(status_code=404, detail={"error": "Комментарий не найден", "code": 404})
     if comment.user_id != user_id:
@@ -279,18 +316,20 @@ async def delete_comment(
             detail={"error": "Комментарий принадлежит другому пользователю", "code": 403},
         )
     db.delete(comment)
-    db.commit()
+    await db.commit()
     return {"success": True}
 
 
 @app.get("/internal/health", tags=["internal"])
-async def health_check(db: Session = Depends(get_db)):
+async def health_check(db: AsyncSession = Depends(get_db)):
     """Проверка работоспособности сервиса и БД."""
-    fav_count = db.query(func.count(FavoriteArticleModel.id)).scalar() or 0
-    comment_count = db.query(func.count(CommentModel.id)).scalar() or 0
+    fav_result = await db.execute(select(func.count()).select_from(FavoriteArticleModel))
+    comment_result = await db.execute(select(func.count()).select_from(CommentModel))
+    fav_count = fav_result.scalar() or 0
+    comment_count = comment_result.scalar() or 0
     return {
         "status": "healthy",
         "timestamp": _now_utc().strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "database": "sqlite",
+        "database": "postgresql",
         "stats": {"favorites_count": fav_count, "comments_count": comment_count},
     }
