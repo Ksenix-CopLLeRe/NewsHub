@@ -1,17 +1,24 @@
+# app/database.py
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import os
 
-# Получаем URL БД из переменной окружения или используем по умолчанию
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./feed.db")
+# Получаем URL из переменной окружения
+DATABASE_URL = os.getenv(
+    "DATABASE_URL", 
+    "postgresql://feed_user:feed_password@localhost:5432/feed_db"
+)
 
 engine = create_engine(
-    DATABASE_URL, 
-    connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {}
+    DATABASE_URL,
+    echo=True,  # Логи SQL-запросов
+    pool_size=5,  # Размер пула соединений
+    max_overflow=10
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
 Base = declarative_base()
 
 def get_db():
