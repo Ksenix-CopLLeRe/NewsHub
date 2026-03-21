@@ -1,4 +1,25 @@
+version: '3.8'
+
 services:
+  postgres:
+    image: postgres:15
+    container_name: feed-postgres
+    environment:
+      POSTGRES_USER: feed_user
+      POSTGRES_PASSWORD: feed_password
+      POSTGRES_DB: feed_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U feed_user -d feed_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - feed-network
+
   feed-service:
     build:
       context: .
@@ -11,8 +32,17 @@ services:
     environment:
       - ENVIRONMENT=development
       - DEBUG=true
-      - DATABASE_URL=sqlite:///./feed.db
+      - DATABASE_URL=postgresql://feed_user:feed_password@postgres:5432/feed_db
+    depends_on:
+      postgres:
+        condition: service_healthy
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    networks:
+      - feed-network
+
+networks:
+  feed-network:
+    driver: bridge
 
 volumes:
-  feed_db:
+  postgres_data:
