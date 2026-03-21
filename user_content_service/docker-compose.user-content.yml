@@ -1,4 +1,21 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: user-content-postgres
+    environment:
+      POSTGRES_USER: usercontent
+      POSTGRES_PASSWORD: usercontent
+      POSTGRES_DB: usercontent
+    ports:
+      - "5433:5432"
+    volumes:
+      - user_content_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U usercontent"]
+      interval: 2s
+      timeout: 5s
+      retries: 5
+
   user-content-service:
     build:
       context: ..
@@ -6,10 +23,11 @@ services:
     container_name: user-content-service
     ports:
       - "8002:8002"
-    volumes:
-      - user_content_db:/app/data
     environment:
-      - DATABASE_URL=sqlite:////app/data/user_content.db
+      - DATABASE_URL=postgresql://usercontent:usercontent@postgres:5432/usercontent
+    depends_on:
+      postgres:
+        condition: service_healthy
 
 volumes:
-  user_content_db:
+  user_content_pgdata:
