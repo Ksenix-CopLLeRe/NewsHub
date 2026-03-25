@@ -1,20 +1,22 @@
 # app/database.py
+import os
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-import os
+from sqlalchemy.pool import QueuePool
 
-# Получаем URL из переменной окружения
 DATABASE_URL = os.getenv(
-    "DATABASE_URL", 
+    "DATABASE_URL",
     "postgresql://feed_user:feed_password@localhost:5432/feed_db"
 )
 
 engine = create_engine(
     DATABASE_URL,
-    echo=True,  # Логи SQL-запросов
-    pool_size=5,  # Размер пула соединений
-    max_overflow=10
+    poolclass=QueuePool,
+    pool_size=5,
+    max_overflow=10,
+    pool_pre_ping=True,
+    echo=os.getenv("DEBUG", "false").lower() == "true"
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -22,6 +24,7 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 def get_db():
+    """Dependency для получения сессии БД"""
     db = SessionLocal()
     try:
         yield db
