@@ -1,150 +1,209 @@
+# app/rss_parser.py
+import asyncio
 import feedparser
-from datetime import datetime
 import logging
-from typing import List, Dict, Optional
 import time
+from datetime import datetime, timezone
+from typing import List, Dict, Optional, Tuple
+from urllib.parse import urlparse
 
-logging.basicConfig(level=logging.INFO)
+import httpx
+
 logger = logging.getLogger(__name__)
 
-CATEGORY_MAPPING = {
-    "russia": "россия",
-    "world": "мир",
-    "economics": "экономика", 
-    "science": "наука",
-    "sport": "спорт",
-    "culture": "культура"
-}
-
-# URL RSS лент Lenta.ru по категориям
 RSS_FEEDS = {
-    "россия": "https://lenta.ru/rss/news/russia",
-    "мир": "https://lenta.ru/rss/news/world", 
-    "экономика": "https://lenta.ru/rss/news/economics",
-    "наука": "https://lenta.ru/rss/news/science",
-    "спорт": "https://lenta.ru/rss/news/sport",
-    "культура": "https://lenta.ru/rss/news/culture"
+    "россия": [
+        "https://ria.ru/export/rss2/archive/index.xml",
+        "https://www.interfax.ru/rss.asp",
+        "https://tass.ru/rss/v2.xml"
+    ],
+    "мир": [
+        "https://tass.ru/rss/v2.xml",
+        "https://www.interfax.ru/rss.asp"
+    ],
+    "экономика": [
+        "https://www.kommersant.ru/RSS/section-economics.xml",
+        "https://www.finam.ru/net/analysis/conews/rsspoint",
+        "https://www.vedomosti.ru/rss/rubric/economics"
+    ],
+    "наука": [
+        "https://nplus1.ru/rss",
+        "https://elementy.ru/rss/news",
+        "https://scientificrussia.ru/rss"
+    ],
+    "спорт": [
+        "https://rsport.ria.ru/export/rss2/index.xml",
+        "https://www.sport-express.ru/services/materials/news/se/",
+        "https://tass.ru/rss/v2.xml"
+    ],
+    "культура": [
+        "https://www.kommersant.ru/RSS/section-culture.xml",
+        "https://snob.ru/rss"
+    ]
 }
 
-def parse_rss_feed(category: str) -> List[Dict]:
-    """
-    Парсит RSS ленту Lenta.ru для указанной категории
-    """
-    if category not in RSS_FEEDS:
-        logger.error(f"Неизвестная категория: {category}")
-        return []
-    
-    feed_url = RSS_FEEDS[category]
-    logger.info(f"Парсинг RSS для категории '{category}': {feed_url}")
-    
+REQUEST_TIMEOUT = 10.0
+MAX_CONCURRENT_REQUESTS = 10
+MAX_ARTICLES_PER_SOURCE = 30
+
+
+async def fetch_rss_feed(client: httpx.AsyncClient, url: str) -> Optional[str]:
     try:
-        # Парсим RSS ленту
-        feed = feedparser.parse(feed_url)
-        
-        if feed.bozo:
-            logger.warning(f"Ошибки при парсинге RSS: {feed.bozo_exception}")
-        
-        news_items = []
-        for entry in feed.entries[:30]:  # Берем последние 30 новостей
-            try:
-                news_item = {
-                    "url": entry.link,
-                    "title": entry.title,
-                    "description": entry.summary if hasattr(entry, 'summary') else '',
-                    "image_url": extract_image_url(entry),
-                    "source_name": "Lenta.ru",
-                    "published_at": parse_pub_date(entry),
-                    "category": category
-                }
-                news_items.append(news_item)
-            except Exception as e:
-                logger.error(f"Ошибка обработки записи: {e}")
-                continue
-        
-        logger.info(f"Получено {len(news_items)} новостей для категории '{category}'")
-        return news_items
-        
+        response = await client.get(url, timeout=REQUEST_TIMEOUT)
+        response.raise_for_status()
+        return response.text
     except Exception as e:
-        logger.error(f"Ошибка при парсинге RSS: {e}")
-        return []
-
-def extract_image_url(entry) -> str:
-    """
-    Извлекает URL изображения из RSS записи
-    """
-    if hasattr(entry, 'media_content') and entry.media_content:
-        return entry.media_content[0].get('url', '')
-    
-    if hasattr(entry, 'links'):
-        for link in entry.links:
-            if link.get('type', '').startswith('image/'):
-                return link.get('href', '')
-    
-    if hasattr(entry, 'enclosures'):
-        for enclosure in entry.enclosures:
-            if enclosure.get('type', '').startswith('image/'):
-                return enclosure.get('href', '')
-    
-    # Возвращаем пустую строку, если изображение не найдено
-    return ""
-
-def parse_pub_date(entry) -> datetime:
-    """
-    Преобразует дату публикации из RSS в datetime
-    """
-    if hasattr(entry, 'published_parsed') and entry.published_parsed:
-        return datetime(*entry.published_parsed[:6])
-    
-    if hasattr(entry, 'updated_parsed') and entry.updated_parsed:
-        return datetime(*entry.updated_parsed[:6])
-    
-    # Если даты нет, используем текущее время
-    return datetime.now()
-
-def update_all_categories() -> Dict[str, int]:
-    """
-    Обновляет новости для всех категорий
-    """
-    results = {}
-    for category in RSS_FEEDS.keys():
-        news_items = parse_rss_feed(category)
-        results[category] = len(news_items)
-        time.sleep(1) 
-    
-    return results
-
-if __name__ == "__main__":
-    test_items = parse_rss_feed("россия")
-    for item in test_items[:3]:
-        print(f"Заголовок: {item['title']}")
-        print(f"URL: {item['url']}")
-        print(f"Дата: {item['published_at']}")
-        print("-" * 50)
+        logger.warning(f"RSS error {url}: {e}")
+        return None
 
 
+def parse_rss_content(xml: str, source_url: str, category: str) -> List[Dict]:
+    feed = feedparser.parse(xml)
 
-# Как посмотреть новости
-# # Получить все новости (первые 20)
-# curl http://localhost:8000/feed
+    items = []
+    for entry in feed.entries[:MAX_ARTICLES_PER_SOURCE]:
+        try:
+            image_url = ""
 
-# # Получить новости конкретной категории
-# curl "http://localhost:8000/feed?category=экономика&limit=5"
+            if hasattr(entry, "media_content") and entry.media_content:
+                image_url = entry.media_content[0].get("url", "")
+            elif hasattr(entry, "links"):
+                for link in entry.links:
+                    if link.get("type", "").startswith("image/"):
+                        image_url = link.get("href", "")
+                        break
 
-# # Поиск по тексту
-# curl "http://localhost:8000/feed?q=путин&limit=3"
+            if hasattr(entry, "published_parsed") and entry.published_parsed:
+                published = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
+            elif hasattr(entry, "updated_parsed") and entry.updated_parsed:
+                published = datetime(*entry.updated_parsed[:6], tzinfo=timezone.utc)
+            else:
+                published = datetime.now(timezone.utc)
+ 
+            items.append({
+                "url": entry.link,
+                "title": entry.title.strip() if entry.title else "",
+                "description": getattr(entry, "summary", ""),
+                "image_url": image_url,
+                "source_name": extract_source_name(source_url),
+                "published_at": published,
+                "category": category
+            })
+        except Exception:
+            continue
 
-# # С пагинацией (пропустить 10, взять 5)
-# curl "http://localhost:8000/feed?skip=10&limit=5"
+    return items
 
-# # Зайти в контейнер
-# docker exec -it feed-service /bin/bash
 
-# # Открыть базу данных
-# sqlite3 feed.db
+def extract_source_name(url: str) -> str:
+    domain = urlparse(url).netloc
 
-# # SQL запросы
-# sqlite> .tables
-# sqlite> SELECT COUNT(*) FROM news;
-# sqlite> SELECT title, category, published_at FROM news LIMIT 5;
-# sqlite> SELECT * FROM news WHERE category = 'экономика' LIMIT 3;
-# sqlite> .exit
+    if "ria.ru" in domain:
+        return "РИА Новости"
+    if "tass.ru" in domain:
+        return "ТАСС"
+    if "interfax.ru" in domain:
+        return "Интерфакс"
+    if "kommersant.ru" in domain:
+        return "Коммерсантъ"
+    if "nplus1.ru" in domain:
+        return "N+1"
+    if "sport-express.ru" in domain:
+        return "Спорт-Экспресс"
+
+    return domain.replace("www.", "").split(".")[0]
+
+
+async def parse_category_async(category: str, urls: List[str], client: httpx.AsyncClient):
+    semaphore = asyncio.Semaphore(5)
+
+    async def fetch(url):
+        async with semaphore:
+            return url, await fetch_rss_feed(client, url)
+
+    tasks = [fetch(url) for url in urls]
+    results = await asyncio.gather(*tasks)
+
+    all_news = []
+
+    for url, xml in results:
+        if not xml:
+            continue
+        items = parse_rss_content(xml, url, category)
+        all_news.extend(items)
+
+    seen = set()
+    unique = []
+
+    for item in all_news:
+        if item["url"] not in seen:
+            seen.add(item["url"])
+            unique.append(item)
+
+    unique.sort(key=lambda x: x["published_at"], reverse=True)
+
+    return unique
+
+
+async def update_category_async(db_session, category: str) -> Dict:
+    start = time.time()
+
+    async with httpx.AsyncClient(
+        timeout=REQUEST_TIMEOUT,
+        limits=httpx.Limits(max_keepalive_connections=MAX_CONCURRENT_REQUESTS)
+    ) as client:
+        news_items = await parse_category_async(
+            category,
+            RSS_FEEDS[category],
+            client
+        )
+
+    from app import crud, schemas
+
+    saved = 0
+    errors = 0
+
+    try:
+        for item in news_items:
+            try:
+                news = schemas.NewsCreate(**item)
+                await asyncio.to_thread(crud.create_or_update_news, db_session, news)
+                saved += 1
+            except Exception:
+                errors += 1
+    finally:
+        db_session.close()
+
+    return {
+        "category": category,
+        "parsed": len(news_items),
+        "saved": saved,
+        "errors": errors,
+        "duration_ms": int((time.time() - start) * 1000)
+    }
+
+
+async def update_all_categories_async(db_session) -> Dict:
+    from app.database import SessionLocal
+
+    start = time.time()
+
+    tasks = [
+        update_category_async(SessionLocal(), category)
+        for category in RSS_FEEDS.keys()
+    ]
+
+    results = await asyncio.gather(*tasks)
+
+    total_parsed = sum(r["parsed"] for r in results)
+    total_saved = sum(r["saved"] for r in results)
+    total_errors = sum(r["errors"] for r in results)
+
+    return {
+        "status": "completed",
+        "results": {r["category"]: r for r in results},
+        "total_parsed": total_parsed,
+        "total_saved": total_saved,
+        "total_errors": total_errors,
+        "duration_ms": int((time.time() - start) * 1000)
+    }

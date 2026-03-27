@@ -12,6 +12,7 @@ import threading
 
 from app import models, schemas, crud, rss_parser
 from app.database import engine, get_db
+from app.rss_parser import update_category_async, update_all_categories_async
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -184,112 +185,35 @@ def get_categories(db: Session = Depends(get_db)):
     }
 
 # ---------- POST /rss/update/{category} ----------
-@app.post("/rss/update/{category}", response_model=schemas.RSSUpdateResponse)
-def update_category(
+@app.post("/rss/update/{category}")
+async def update_category(
     category: str,
     db: Session = Depends(get_db)
 ):
     """
-    Обновить новости из RSS для указанной категории
+    Асинхронное обновление новостей из RSS для указанной категории
     """
-    start_time = time.time()
-    
     if category not in rss_parser.RSS_FEEDS:
         raise HTTPException(
             status_code=400,
             detail=f"Unknown category: {category}. Available: {list(rss_parser.RSS_FEEDS.keys())}"
         )
     
-    # Парсим RSS
-    news_items = rss_parser.parse_rss_feed(category)
-    parsed_count = len(news_items)
-    
-    # Сохраняем в БД
-    saved_count = 0
-    error_count = 0
-    
-    for item in news_items:
-        try:
-            news_create = schemas.NewsCreate(**item)
-            crud.create_or_update_news(db, news_create)
-            saved_count += 1
-        except Exception as e:
-            logger.error(f"Ошибка сохранения: {e}")
-            error_count += 1
-    
-    duration_ms = int((time.time() - start_time) * 1000)
-    
-    return {
-        "category": category,
-        "parsed": parsed_count,
-        "saved": saved_count,
-        "errors": error_count,
-        "duration_ms": duration_ms
-    }
+    # Вызываем асинхронный парсер
+    result = await update_category_async(db, category)
+    return result
+
 
 # ---------- POST /rss/update-all ----------
-@app.post("/rss/update-all", response_model=schemas.BulkUpdateResponse)
-def update_all_categories(
+@app.post("/rss/update-all")
+async def update_all_categories(
     db: Session = Depends(get_db)
 ):
     """
-    Обновить все категории
+    Асинхронное обновление всех категорий
     """
-    start_time = time.time()
-    results = {}
-    total_parsed = 0
-    total_saved = 0
-    total_errors = 0
-    
-    for category in rss_parser.RSS_FEEDS.keys():
-        try:
-            # Парсим RSS
-            news_items = rss_parser.parse_rss_feed(category)
-            parsed = len(news_items)
-            saved = 0
-            errors = 0
-            
-            # Сохраняем
-            for item in news_items:
-                try:
-                    news_create = schemas.NewsCreate(**item)
-                    crud.create_or_update_news(db, news_create)
-                    saved += 1
-                except Exception as e:
-                    logger.error(f"Ошибка сохранения в {category}: {e}")
-                    errors += 1
-            
-            results[category] = {
-                "parsed": parsed,
-                "saved": saved,
-                "errors": errors
-            }
-            total_parsed += parsed
-            total_saved += saved
-            total_errors += errors
-            
-            time.sleep(0.5)  # Пауза между запросами
-            
-        except Exception as e:
-            logger.error(f"Ошибка обновления категории {category}: {e}")
-            results[category] = {
-                "parsed": 0,
-                "saved": 0,
-                "errors": 1,
-                "error": str(e)
-            }
-            total_errors += 1
-    
-    duration_ms = int((time.time() - start_time) * 1000)
-    
-    return {
-        "status": "completed",
-        "results": results,
-        "total_parsed": total_parsed,
-        "total_saved": total_saved,
-        "total_errors": total_errors,
-        "duration_ms": duration_ms
-    }
+    result = await update_all_categories_async(db)
+    return result
 
 
 # ---------- POST /news/clean ----------
