@@ -38,3 +38,9 @@ class ReactionListResponse(BaseModel):
     total: int
     page: int
     size: int
+
+class ReactionAnalytics(BaseModel):
+    """Модель для аналитики реакций"""
+    stats: dict
+    total: int
+    timestamp: datetime
