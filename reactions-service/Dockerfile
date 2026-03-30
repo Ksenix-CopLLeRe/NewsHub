@@ -1,12 +1,12 @@
-# Используем официальный образ Python 3.11
-FROM python:3.11-slim
+# Используем зеркало Microsoft (вместо Docker Hub)
+FROM mcr.microsoft.com/devcontainers/python:3.11
 
 WORKDIR /app
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 👇 РАСКОММЕНТИРУЙ ЭТУ СТРОКУ для теста:
-COPY main.py .
+# Копируем весь код сервиса, чтобы внутри контейнера были app/*
+COPY . .
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
