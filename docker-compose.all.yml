@@ -1,0 +1,120 @@
+networks:
+  newshub-net:
+    driver: bridge
+
+services:
+  news:
+    build:
+      context: .
+      dockerfile: Dockerfile.monolith
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    command: sh -c "python manage.py migrate && python manage.py runserver 0.0.0.0:8000"
+    networks:
+      - newshub-net
+
+  feed-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: feed_user
+      POSTGRES_PASSWORD: feed_password
+      POSTGRES_DB: feed_db
+    volumes:
+      - feed_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U feed_user -d feed_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - newshub-net
+
+  feed-service:
+    build:
+      context: ./feed_service
+      dockerfile: Dockerfile
+    ports:
+      - "8003:8000"
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    environment:
+      - ENVIRONMENT=development
+      - DEBUG=true
+      - DATABASE_URL=postgresql://feed_user:feed_password@feed-postgres:5432/feed_db
+    depends_on:
+      feed-postgres:
+        condition: service_healthy
+    networks:
+      - newshub-net
+
+  reactions-postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: reactions_user
+      POSTGRES_PASSWORD: reactions_password
+      POSTGRES_DB: reactions_db
+    volumes:
+      - reactions_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reactions_user -d reactions_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - newshub-net
+
+  reactions-service:
+    build:
+      context: ./reactions-service
+      dockerfile: Dockerfile
+    ports:
+      - "8004:8000"
+    environment:
+      - DB_TYPE=postgresql
+      - DB_USER=reactions_user
+      - DB_PASSWORD=reactions_password
+      - DB_NAME=reactions_db
+      - DB_HOST=reactions-postgres
+      - DB_PORT=5432
+    depends_on:
+      reactions-postgres:
+        condition: service_healthy
+    networks:
+      - newshub-net
+
+  user-content-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: usercontent
+      POSTGRES_PASSWORD: usercontent
+      POSTGRES_DB: usercontent
+    volumes:
+      - user_content_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U usercontent -d usercontent"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - newshub-net
+
+  user-content-service:
+    build:
+      context: .
+      dockerfile: user_content_service/Dockerfile.user-content-service
+    ports:
+      - "8002:8002"
+    environment:
+      - DATABASE_URL=postgresql://usercontent:usercontent@user-content-postgres:5432/usercontent
+    depends_on:
+      user-content-postgres:
+        condition: service_healthy
+    networks:
+      - newshub-net
+
+volumes:
+  feed_postgres_data:
+  reactions_postgres_data:
+  user_content_pgdata:
+
