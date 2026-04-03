@@ -48,12 +48,20 @@ def home(request):
     )
     
     articles = feed_data.get('items', [])
-    # Добавляем дефолтный source, если его нет
+    # Приводим формат данных к ожидаемому шаблоном:
+    # - в ответе Feed Service есть поля source_name и image_url
+    # - в шаблоне используются article.source.name и article.urlToImage
     for article in articles:
-        if 'source' not in article or not article.get('source'):
-            article['source'] = {'name': 'Lenta.ru'}
-        elif not article['source'].get('name'):
-            article['source']['name'] = 'Lenta.ru'
+        # источник
+        source_name = article.get('source_name')
+        if not source_name:
+            source_name = 'Lenta.ru'
+        article['source'] = {'name': source_name}
+
+        # картинка
+        if 'urlToImage' not in article or not article.get('urlToImage'):
+            image_url = article.get('image_url') or ''
+            article['urlToImage'] = image_url
     total_news = feed_data.get('total', 0)
     
     # Категории для отображения
