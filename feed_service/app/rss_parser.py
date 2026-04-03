@@ -85,7 +85,7 @@ def parse_rss_content(xml: str, source_url: str, category: str) -> List[Dict]:
                 "title": entry.title.strip() if entry.title else "",
                 "description": getattr(entry, "summary", ""),
                 "image_url": image_url,
-                "source_name": extract_source_name(source_url),
+                "source_name": extract_source_name(source_url) or "Lenta.ru",
                 "published_at": published,
                 "category": category
             })
@@ -96,22 +96,45 @@ def parse_rss_content(xml: str, source_url: str, category: str) -> List[Dict]:
 
 
 def extract_source_name(url: str) -> str:
-    domain = urlparse(url).netloc
+    domain = urlparse(url).netloc.lower()
+    domain = domain.replace("www.", "").replace("m.", "")
 
-    if "ria.ru" in domain:
-        return "РИА Новости"
-    if "tass.ru" in domain:
-        return "ТАСС"
-    if "interfax.ru" in domain:
-        return "Интерфакс"
-    if "kommersant.ru" in domain:
-        return "Коммерсантъ"
-    if "nplus1.ru" in domain:
-        return "N+1"
-    if "sport-express.ru" in domain:
-        return "Спорт-Экспресс"
-
-    return domain.replace("www.", "").split(".")[0]
+    source_map = {
+        "ria.ru": "РИА Новости",
+        "tass.ru": "ТАСС",
+        "interfax.ru": "Интерфакс",
+        "kommersant.ru": "Коммерсантъ",
+        "nplus1.ru": "N+1",
+        "elementy.ru": "Элементы",
+        "sport-express.ru": "Спорт-Экспресс",
+        "lenta.ru": "Lenta.ru",
+        "vedomosti.ru": "Ведомости",
+        "finam.ru": "Финам",
+        "snob.ru": "Snob",
+        "scientificrussia.ru": "Научная Россия",
+        "rsport.ria.ru": "РИА Новости Спорт",
+        "rbc.ru": "РБК",
+        "iz.ru": "Известия",
+        "mk.ru": "Московский комсомолец",
+        "kp.ru": "Комсомольская правда",
+        "aif.ru": "Аргументы и факты",
+        "rg.ru": "Российская газета",
+    }
+    
+    if domain in source_map:
+        return source_map[domain]
+    
+    for key, name in source_map.items():
+        if key in domain:
+            return name
+    
+    parts = domain.split('.')
+    if len(parts) >= 2:
+        main_part = parts[-2]
+        if main_part and len(main_part) > 2:
+            return main_part.capitalize()
+    
+    return domain if domain else "Lenta.ru"
 
 
 async def parse_category_async(category: str, urls: List[str], client: httpx.AsyncClient):
