@@ -14,5 +14,8 @@ urlpatterns = [
     path('api/add-comment/', views.add_comment, name='add_comment'),
     path('api/edit-comment/<int:comment_id>/', views.edit_comment, name='edit_comment'),
     path('api/delete-comment/<int:comment_id>/', views.delete_comment, name='delete_comment'),
+    
+    # Админские эндпоинты
+    path('admin/stats/', views.admin_stats, name='admin_stats'),
 ]
 
