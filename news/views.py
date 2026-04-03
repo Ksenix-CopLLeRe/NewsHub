@@ -1,70 +1,70 @@
-from django.shortcuts import render, redirect, get_object_or_404
+# news/views.py
+from django.shortcuts import render, redirect
 from django.contrib.auth import login, logout, authenticate
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
 from django.contrib.auth.forms import UserCreationForm, AuthenticationForm
 from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
-from django.utils import timezone
-from .models import FavoriteArticle, Comment, Reaction
-from .services import (
-    get_feed_client,
-    get_user_content_client,
-    get_reactions_client,
-)
+from django.views.decorators.csrf import csrf_exempt
+from config.settings import USER_CONTENT_SERVICE_URL, REACTIONS_SERVICE_URL
 import json
 
+from .services import (
+    get_feed_client,
+    get_reactions_client,
+    get_user_content_client,
+    REACTION_TYPES
+)
 
-# Заглушка для теста, если API вернул пустой список
-TEST_ARTICLES = [
-    {
-        'title': 'Тестовая новость 1',
-        'description': 'Описание тестовой новости 1.',
-        'url': '#',
-        'urlToImage': 'https://via.placeholder.com/300x200.png?text=News+1'
-    },
-    {
-        'title': 'Тестовая новость 2',
-        'description': 'Описание тестовой новости 2.',
-        'url': '#',
-        'urlToImage': 'https://via.placeholder.com/300x200.png?text=News+2'
-    },
-]
+CATEGORY_MAP = {
+    'general': None,      # все новости
+    'russia': 'россия',
+    'world': 'мир',
+    'economics': 'экономика',
+    'science': 'наука',
+    'sport': 'спорт',
+    'culture': 'культура',
+}
 
 def home(request):
     """
-    Главная страница с лентой новостей.
-    
-    Отображает новости из выбранной категории с возможностью поиска.
-    Для авторизованных пользователей показывает информацию об избранном
-    и реакциях на новости.
-    
-    Args:
-        request: HTTP-запрос
-        
-    Query Parameters:
-        category: Категория новостей (по умолчанию 'russia')
-        q: Поисковый запрос (опционально)
-        
-    Returns:
-        HTTP-ответ с отрендеренным шаблоном home.html
-        
-    Context:
-        articles: Список новостей
-        current_category: Текущая выбранная категория
-        categories: Список доступных категорий
-        query: Поисковый запрос
-        favorite_urls: Множество URL избранных статей (для авторизованных)
-        user_reactions: Словарь реакций пользователя {url: reaction_type}
-        reactions_count: Словарь количества реакций {url: {type: count}}
+    Главная страница с лентой новостей из Feed Service.
     """
-    category = request.GET.get('category', 'russia')
+    category = request.GET.get('category', 'general')
     query = request.GET.get('q', '').strip()
+    page = int(request.GET.get('page', 1))
+    size = int(request.GET.get('size', 20))
 
-    # BFF: получаем ленту новостей через клиент (позже здесь будет FastAPI Feed Service)
+    feed_category = CATEGORY_MAP.get(category)
+
+    # Получаем ленту новостей из Feed Service
     feed_client = get_feed_client()
-    articles = feed_client.get_feed(category=category, query=query)
+    feed_data = feed_client.get_feed(
+        category=feed_category,
+        query=query if query else None,
+        page=page,
+        size=size
+    )
     
+    articles = feed_data.get('items', [])
+    # Приводим формат данных к ожидаемому шаблоном:
+    # - в ответе Feed Service есть поля source_name и image_url
+    # - в шаблоне используются article.source.name и article.urlToImage
+    for article in articles:
+        # источник
+        source_name = article.get('source_name')
+        if not source_name:
+            source_name = 'Lenta.ru'
+        article['source'] = {'name': source_name}
+
+        # картинка
+        if 'urlToImage' not in article or not article.get('urlToImage'):
+            image_url = article.get('image_url') or ''
+            article['urlToImage'] = image_url
+    total_news = feed_data.get('total', 0)
+    
+    # Категории для отображения
     categories = [
         {'code': 'general', 'name': 'Все новости'},
         {'code': 'russia', 'name': 'Россия'},
@@ -83,17 +83,16 @@ def home(request):
     if request.user.is_authenticated:
         user_content_client = get_user_content_client()
         reactions_client = get_reactions_client()
-
-        # Избранное через клиент User Content Service
-        favorite_urls = user_content_client.get_favorite_urls(request.user)
-
-        # Реакции и счетчики через клиент Reactions Service
+        
+        # Получаем URL избранных статей
+        favorite_urls = user_content_client.get_favorite_urls(request.user.id)
+        
+        # Получаем реакции для всех статей на странице
         urls = [a.get('url') for a in articles if a.get('url')]
-        reactions_data = reactions_client.get_user_reactions_for_urls(
-            request.user, urls
-        )
-        user_reactions = reactions_data["user_reactions"]
-        reactions_count = reactions_data["reactions_count"]
+        if urls:
+            user_reactions, reactions_count = reactions_client.get_user_reactions_for_urls(
+                request.user.id, urls
+            )
 
     context = {
         'articles': articles,
@@ -103,33 +102,31 @@ def home(request):
         'favorite_urls': favorite_urls,
         'user_reactions': user_reactions,
         'reactions_count': reactions_count,
+        'total_news': total_news,
+        'page': page,
+        'size': size,
     }
 
     return render(request, 'news/home.html', context)
 
+
 @login_required
 def favorites(request):
     """
-    Страница избранных статей пользователя.
-    
-    Отображает все статьи, сохраненные пользователем в избранное,
-    вместе с комментариями к ним. Требует авторизации.
-    
-    Args:
-        request: HTTP-запрос (должен содержать авторизованного пользователя)
-        
-    Returns:
-        HTTP-ответ с отрендеренным шаблоном favorites.html
-        
-    Context:
-        articles_with_comments: Список словарей, каждый содержит:
-            - article: Объект FavoriteArticle
-            - comments: QuerySet комментариев к статье
+    Страница избранных статей пользователя из User Content Service.
     """
     user_content_client = get_user_content_client()
-    articles_with_comments = user_content_client.get_favorites_with_comments(
-        request.user
-    )
+    
+    # Получаем избранные статьи с комментариями
+    favorites_data = user_content_client.get_favorites_with_comments(request.user.id)
+    
+    # Преобразуем данные для шаблона
+    articles_with_comments = []
+    for item in favorites_data:
+        articles_with_comments.append({
+            'article': item,
+            'comments': item.get('comments', [])
+        })
     
     context = {
         'title': 'Избранное',
@@ -181,202 +178,252 @@ def register(request):
 
 @login_required
 @require_http_methods(["POST"])
+@csrf_exempt
 def toggle_favorite(request):
     """
     API endpoint для добавления/удаления статьи из избранного.
-    
-    Если статья уже в избранном - удаляет её, если нет - добавляет.
-    Работает через AJAX-запросы.
-    
-    Args:
-        request: HTTP POST-запрос с JSON-данными
-        
-    Request Body (JSON):
-        url: URL статьи (обязательно)
-        title: Заголовок статьи
-        description: Описание статьи
-        urlToImage: URL изображения
-        source: Словарь с информацией об источнике {'name': '...'}
-        publishedAt: Дата публикации в ISO формате
-        
-    Returns:
-        JsonResponse с результатом операции:
-        {
-            'success': bool,
-            'is_favorite': bool  # True если добавлено, False если удалено
-        }
-        
-    Raises:
-        JsonResponse с ошибкой при некорректных данных (status 400/500)
+    Работает через User Content Service.
     """
     try:
         data = json.loads(request.body)
+        print(f"Received data: {data}")
+
+         # Получаем source_name с дефолтным значением
+        source = data.get('source', {})
+        source_name = source.get('name', '')
+        
+        # Если source_name пустой, используем значение по умолчанию
+        if not source_name or source_name.strip() == '':
+            source_name = 'Lenta.ru'
+        
+         # Получаем urlToImage, если пусто - None
+        url_to_image = data.get('urlToImage') or data.get('image', '')
+        if not url_to_image or url_to_image.strip() == '':
+            url_to_image = None
+        
+        # Получаем published_at, если пусто - None
+        published_at = data.get('publishedAt')
+        if not published_at or published_at.strip() == '':
+            published_at = None
+        
+        # Получаем title, если пусто - дефолтное значение
+        title = data.get('title', '')
+        if not title or title.strip() == '':
+            title = 'Новость без заголовка'
+        
+        # Извлекаем данные статьи
+        article_data = {
+            'url': data.get('url'),
+            'title': title,
+            'description': data.get('description', ''),
+            'url_to_image': url_to_image,
+            'source_name': source_name,
+            'published_at': published_at,
+        }
+        print(f"Sending to service: {article_data}")
+        
         user_content_client = get_user_content_client()
-        result = user_content_client.toggle_favorite(request.user, data)
-        status = result.pop("status", 200)
-        return JsonResponse(result, status=status)
+        result = user_content_client.toggle_favorite(request.user.id, article_data)
+        
+        return JsonResponse(result, status=result.get('status', 200))
+        
+    except json.JSONDecodeError:
+        return JsonResponse({'success': False, 'error': 'Invalid JSON'}, status=400)
     except Exception as e:
+        print(f"❌ Error: {e}")
+        import traceback
+        traceback.print_exc()
         return JsonResponse({'success': False, 'error': str(e)}, status=500)
 
 
 @login_required
 @require_http_methods(["POST"])
+@csrf_exempt
 def add_reaction(request):
     """
     API endpoint для добавления/изменения/удаления реакции на новость.
-    
-    Если реакция уже существует и того же типа - удаляет её (отмена).
-    Если реакция другого типа - обновляет тип реакции.
-    Если реакции нет - создает новую.
-    
-    Args:
-        request: HTTP POST-запрос с JSON-данными
-        
-    Request Body (JSON):
-        url: URL новости (обязательно)
-        reaction_type: Тип реакции - 'important', 'interesting', 'shocking',
-                      'useful', 'liked' (обязательно)
-        
-    Returns:
-        JsonResponse с результатом операции:
-        {
-            'success': bool,
-            'reaction_type': str или None,  # None если реакция отменена
-            'reactions_count': dict  # {reaction_type: count} для всех типов
-        }
-        
-    Raises:
-        JsonResponse с ошибкой при некорректных данных (status 400/500)
+    Работает через Reactions Service.
     """
     try:
         data = json.loads(request.body)
         article_url = data.get('url')
         reaction_type = data.get('reaction_type')
-
+        
+        if not article_url or not reaction_type:
+            return JsonResponse(
+                {'success': False, 'error': 'Missing url or reaction_type'},
+                status=400
+            )
+        
         reactions_client = get_reactions_client()
         result = reactions_client.toggle_reaction(
-            request.user, article_url, reaction_type
+            request.user.id,
+            article_url,
+            reaction_type
         )
-        status = result.pop("status", 200)
-        return JsonResponse(result, status=status)
+        
+        # Получаем обновлённые счётчики для этой новости
+        if result.get('success'):
+            counts = reactions_client.get_reaction_counts(article_url)
+            result['reactions_count'] = counts
+        
+        return JsonResponse(result, status=result.get('status', 200))
+        
+    except json.JSONDecodeError:
+        return JsonResponse({'success': False, 'error': 'Invalid JSON'}, status=400)
     except Exception as e:
         return JsonResponse({'success': False, 'error': str(e)}, status=500)
 
 
 @login_required
 @require_http_methods(["POST"])
+@csrf_exempt
 def add_comment(request):
     """
     API endpoint для добавления комментария к избранной статье.
-    
-    Позволяет пользователю добавить комментарий к своей избранной статье.
-    Комментарии видны только автору.
-    
-    Args:
-        request: HTTP POST-запрос с JSON-данными
-        
-    Request Body (JSON):
-        article_id: ID избранной статьи (обязательно)
-        text: Текст комментария (обязательно, не может быть пустым)
-        
-    Returns:
-        JsonResponse с результатом операции:
-        {
-            'success': bool,
-            'comment': {
-                'id': int,
-                'text': str,
-                'created_at': str  # Формат: 'DD.MM.YYYY HH:MM'
-            }
-        }
-        
-    Raises:
-        JsonResponse с ошибкой при некорректных данных (status 400/500)
-        404 если статья не найдена или не принадлежит пользователю
+    Работает через User Content Service.
     """
     try:
         data = json.loads(request.body)
         article_id = data.get('article_id')
         text = data.get('text', '').strip()
-
+        
+        if not article_id:
+            return JsonResponse(
+                {'success': False, 'error': 'Missing article_id'},
+                status=400
+            )
+        
+        if not text:
+            return JsonResponse(
+                {'success': False, 'error': 'Comment text is empty'},
+                status=400
+            )
+        
         user_content_client = get_user_content_client()
-        result = user_content_client.add_comment(request.user, article_id, text)
-        status = result.pop("status", 200)
-        return JsonResponse(result, status=status)
+        result = user_content_client.add_comment(
+            request.user.id,
+            article_id,
+            text
+        )
+        
+        # Форматируем дату для отображения
+        if result.get('success') and result.get('comment'):
+            from datetime import datetime
+            comment = result['comment']
+            if comment.get('created_at'):
+                dt = datetime.fromisoformat(comment['created_at'].replace('Z', '+00:00'))
+                comment['created_at'] = dt.strftime('%d.%m.%Y %H:%M')
+        
+        return JsonResponse(result, status=result.get('status', 200))
+        
+    except json.JSONDecodeError:
+        return JsonResponse({'success': False, 'error': 'Invalid JSON'}, status=400)
     except Exception as e:
         return JsonResponse({'success': False, 'error': str(e)}, status=500)
 
 
 @login_required
 @require_http_methods(["POST"])
+@csrf_exempt
 def edit_comment(request, comment_id):
     """
     API endpoint для редактирования комментария.
-    
-    Позволяет пользователю изменить текст своего комментария.
-    Редактировать можно только свои комментарии.
-    
-    Args:
-        request: HTTP POST-запрос с JSON-данными
-        comment_id: ID комментария для редактирования
-        
-    Request Body (JSON):
-        text: Новый текст комментария (обязательно, не может быть пустым)
-        
-    Returns:
-        JsonResponse с результатом операции:
-        {
-            'success': bool,
-            'comment': {
-                'id': int,
-                'text': str,
-                'created_at': str  # Формат: 'DD.MM.YYYY HH:MM'
-            }
-        }
-        
-    Raises:
-        JsonResponse с ошибкой при некорректных данных (status 400/500)
-        404 если комментарий не найден или не принадлежит пользователю
+    Работает через User Content Service.
     """
     try:
         data = json.loads(request.body)
         text = data.get('text', '').strip()
-
+        
+        if not text:
+            return JsonResponse(
+                {'success': False, 'error': 'Comment text is empty'},
+                status=400
+            )
+        
         user_content_client = get_user_content_client()
-        result = user_content_client.edit_comment(request.user, comment_id, text)
-        status = result.pop("status", 200)
-        return JsonResponse(result, status=status)
+        result = user_content_client.edit_comment(
+            request.user.id,
+            comment_id,
+            text
+        )
+        
+        # Форматируем дату для отображения
+        if result.get('success') and result.get('comment'):
+            from datetime import datetime
+            comment = result['comment']
+            if comment.get('created_at'):
+                dt = datetime.fromisoformat(comment['created_at'].replace('Z', '+00:00'))
+                comment['created_at'] = dt.strftime('%d.%m.%Y %H:%M')
+        
+        return JsonResponse(result, status=result.get('status', 200))
+        
+    except json.JSONDecodeError:
+        return JsonResponse({'success': False, 'error': 'Invalid JSON'}, status=400)
     except Exception as e:
         return JsonResponse({'success': False, 'error': str(e)}, status=500)
 
 
 @login_required
 @require_http_methods(["POST"])
+@csrf_exempt
 def delete_comment(request, comment_id):
     """
     API endpoint для удаления комментария.
-    
-    Позволяет пользователю удалить свой комментарий.
-    Удалять можно только свои комментарии.
-    
-    Args:
-        request: HTTP POST-запрос
-        comment_id: ID комментария для удаления
-        
-    Returns:
-        JsonResponse с результатом операции:
-        {
-            'success': bool
-        }
-        
-    Raises:
-        JsonResponse с ошибкой при некорректных данных (status 500)
-        404 если комментарий не найден или не принадлежит пользователю
+    Работает через User Content Service.
     """
     try:
         user_content_client = get_user_content_client()
-        result = user_content_client.delete_comment(request.user, comment_id)
-        status = result.pop("status", 200)
-        return JsonResponse(result, status=status)
+        result = user_content_client.delete_comment(
+            request.user.id,
+            comment_id
+        )
+        
+        return JsonResponse(result, status=result.get('status', 200))
+        
     except Exception as e:
         return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+
+# ============ Дополнительные эндпоинты для администрирования ============
+
+@login_required
+def admin_stats(request):
+    """
+    Страница со статистикой из всех микросервисов (только для суперпользователя)
+    """
+    if not request.user.is_superuser:
+        messages.error(request, 'Доступ запрещён')
+        return redirect('news:home')
+    
+    feed_client = get_feed_client()
+    reactions_client = get_reactions_client()
+    user_content_client = get_user_content_client()
+    
+    context = {
+        'feed_stats': feed_client.get_stats(),
+        'reactions_service': {
+            'url': REACTIONS_SERVICE_URL,
+            'status': 'checking...'
+        },
+        'user_content_service': {
+            'url': USER_CONTENT_SERVICE_URL,
+            'status': 'checking...'
+        }
+    }
+    
+    # Проверяем здоровье сервисов
+    try:
+        import requests
+        resp = requests.get(f"{REACTIONS_SERVICE_URL}/", timeout=2)
+        context['reactions_service']['status'] = 'healthy' if resp.status_code == 200 else 'unhealthy'
+    except:
+        context['reactions_service']['status'] = 'unreachable'
+    
+    try:
+        resp = requests.get(f"{USER_CONTENT_SERVICE_URL}/internal/health", timeout=2)
+        context['user_content_service']['status'] = 'healthy' if resp.status_code == 200 else 'unhealthy'
+    except:
+        context['user_content_service']['status'] = 'unreachable'
+    
+    return render(request, 'news/admin_stats.html', context)

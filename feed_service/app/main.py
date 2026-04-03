@@ -8,7 +8,8 @@ from app.database import SessionLocal
 from app import crud, models, schemas
 import time
 import logging
-import threading
+import asyncio
+from contextlib import asynccontextmanager
 
 from app import models, schemas, crud, rss_parser
 from app.database import engine, get_db
@@ -18,15 +19,52 @@ from app.rss_parser import update_category_async, update_all_categories_async
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Создание таблиц (для разработки)
-models.Base.metadata.create_all(bind=engine)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Управление жизненным циклом приложения"""
+        
+    # Создание таблиц
+    models.Base.metadata.create_all(bind=engine)
+    logger.info("Database tables created/verified")
+    
+    # Запуск фоновой очистки старых новостей
+    asyncio.create_task(auto_clean_old_news_async())
+    logger.info("Auto-clean task started")
+    
+    logger.info("Starting initial RSS parsing...")
+    db = SessionLocal()
+    try:
+        result = await update_all_categories_async(db)
+        logger.info(f"Initial RSS parsing completed: {result}")
+    except Exception as e:
+        logger.error(f"Error during initial RSS parsing: {e}")
+    finally:
+        db.close()
+    
+    yield
+    
+    engine.dispose()
+
+async def auto_clean_old_news_async():
+    """Асинхронная очистка старых новостей раз в сутки"""
+    while True:
+        await asyncio.sleep(24 * 3600)  # раз в день
+        db = SessionLocal()
+        try:
+            deleted = crud.delete_old_news(db, days=30)
+            logger.info(f"Auto-cleaned {deleted} old news")
+        except Exception as e:
+            logger.error(f"Error during auto-clean: {e}")
+        finally:
+            db.close()
 
 app = FastAPI(
     title="Feed Service",
     description="Микросервис для управления новостями из RSS-лент",
     version="2.0.0",
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
+    lifespan=lifespan
 )
 
 # CORS
@@ -37,18 +75,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-def auto_clean_old_news():
-    """Запускать очистку раз в сутки"""
-    while True:
-        time.sleep(24 * 3600)  # раз в день
-        db = SessionLocal()
-        crud.delete_old_news(db, days=30)
-        db.close()
-
-# Запустить при старте
-thread = threading.Thread(target=auto_clean_old_news, daemon=True)
-thread.start()
 
 # ============ ЭНДПОИНТЫ ============
 
