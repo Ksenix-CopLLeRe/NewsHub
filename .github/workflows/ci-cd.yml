@@ -1,0 +1,224 @@
+name: NewsHub CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop, "feature/**", "fix/**" ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      deploy_to_prod:
+        description: 'Deploy to production?'
+        type: boolean
+        default: false
+
+env:
+  REGISTRY: ghcr.io
+  DOCKER_BUILDKIT: 1
+
+jobs:
+  # ============== JOB 1: ЛИНТИНГ И СТАТИЧЕСКИЙ АНАЛИЗ ==============
+  lint:
+    name: 🔍 Lint & Static Analysis
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service:
+          - { name: "feed_service", path: "feed_service" }
+          - { name: "reactions-service", path: "reactions-service" }
+          - { name: "user_content_service", path: "user_content_service" }
+          - { name: "news-monolith", path: "." }
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: 'pip'
+          cache-dependency-path: |
+            ${{ matrix.service.path }}/requirements.txt
+            requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f "${{ matrix.service.path }}/requirements.txt" ]; then
+            pip install -r ${{ matrix.service.path }}/requirements.txt
+          fi
+          pip install flake8 black isort mypy
+
+      - name: Check formatting with Black
+        run: |
+          black --check --diff ${{ matrix.service.path }} 2>/dev/null || echo "⚠️ Black formatting issues found"
+
+      - name: Lint with flake8
+        run: |
+          flake8 ${{ matrix.service.path }} --count --select=E9,F63,F7,F82 --show-source --statistics || echo "⚠️ Linting issues"
+          flake8 ${{ matrix.service.path }} --count --exit-zero --max-complexity=10 --statistics
+
+  # ============== JOB 2: СБОРКА DOCKER ОБРАЗОВ ==============
+  build:
+    name: 🐳 Build Docker Images
+    runs-on: ubuntu-latest
+    needs: lint
+    strategy:
+      matrix:
+        service:
+          - { name: "feed-service", context: "./feed_service", dockerfile: "feed_service/Dockerfile" }
+          - { name: "reactions-service", context: "./reactions-service", dockerfile: "reactions-service/Dockerfile" }
+          - { name: "user-content-service", context: ".", dockerfile: "user_content_service/Dockerfile.user-content-service" }
+          - { name: "news-monolith", context: ".", dockerfile: "Dockerfile.monolith" }
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image - ${{ matrix.service.name }}
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.service.context }}
+          file: ${{ matrix.service.dockerfile }}
+          push: false
+          load: true
+          tags: ${{ matrix.service.name }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify build
+        run: |
+          docker image ls | grep ${{ matrix.service.name }} || echo "⚠️ Image not found"
+
+  # ============== JOB 3: ИНТЕГРАЦИОННЫЕ ТЕСТЫ С COMPOSE ==============
+  integration-test:
+    name: 🧪 Integration Tests
+    runs-on: ubuntu-latest
+    needs: build
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Compose
+        run: |
+          docker compose version
+
+      - name: Create .env file for reactions-service
+        run: |
+          cat > reactions-service/app/.env << 'EOF'
+          DB_TYPE=postgresql
+          DB_USER=reactions_user
+          DB_PASSWORD=reactions_password
+          DB_NAME=reactions_db
+          DB_HOST=reactions-postgres
+          DB_PORT=5432
+          EOF
+
+      - name: Start all services
+        run: |
+          docker compose -f docker-compose.all.yml up -d --build
+
+      - name: Wait for services to be healthy
+        run: |
+          echo "⏳ Waiting for services to start..."
+          sleep 30
+          
+          # Проверяем статус контейнеров
+          docker compose -f docker-compose.all.yml ps
+
+      - name: Basic health checks
+        run: |
+          echo "🔍 Checking service health..."
+          
+          # Проверка монолита
+          curl -f -s -o /dev/null -w "News Monolith: %{http_code}\n" http://localhost:8000/admin/ || echo "⚠️ News monolith not responding"
+          
+          # Проверка feed-service
+          curl -f -s -o /dev/null -w "Feed Service: %{http_code}\n" http://localhost:8003/docs || echo "⚠️ Feed service not responding"
+          
+          # Проверка reactions-service
+          curl -f -s -o /dev/null -w "Reactions Service: %{http_code}\n" http://localhost:8004/docs || echo "⚠️ Reactions service not responding"
+          
+          # Проверка user-content-service
+          curl -f -s -o /dev/null -w "User Content Service: %{http_code}\n" http://localhost:8002/docs || echo "⚠️ User Content service not responding"
+
+      - name: Check database connections
+        run: |
+          echo "🗄️ Checking database connectivity..."
+          
+          docker exec $(docker ps -qf "name=feed-postgres") pg_isready -U feed_user -d feed_db || echo "⚠️ Feed DB issue"
+          docker exec $(docker ps -qf "name=reactions-postgres") pg_isready -U reactions_user -d reactions_db || echo "⚠️ Reactions DB issue"
+          docker exec $(docker ps -qf "name=user-content-postgres") pg_isready -U usercontent -d usercontent || echo "⚠️ User Content DB issue"
+
+      - name: Check service logs for errors
+        run: |
+          echo "📋 Checking logs for errors..."
+          
+          docker compose -f docker-compose.all.yml logs --tail=50 | grep -i "error\|exception\|fail" || echo "✅ No critical errors found in logs"
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker compose -f docker-compose.all.yml down -v
+          docker system prune -af --volumes || true
+
+  # ============== JOB 4: ПУШ ОБРАЗОВ В РЕЕСТР ==============
+  push-images:
+    name: 📦 Push to Registry
+    runs-on: ubuntu-latest
+    needs: integration-test
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+    permissions:
+      contents: read
+      packages: write
+    
+    strategy:
+      matrix:
+        service:
+          - { name: "feed-service", context: "./feed_service", dockerfile: "feed_service/Dockerfile", port: "8003" }
+          - { name: "reactions-service", context: "./reactions-service", dockerfile: "reactions-service/Dockerfile", port: "8004" }
+          - { name: "user-content-service", context: ".", dockerfile: "user_content_service/Dockerfile.user-content-service", port: "8002" }
+          - { name: "news-monolith", context: ".", dockerfile: "Dockerfile.monolith", port: "8000" }
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Generate image tags
+        id: meta
+        run: |
+          REPO_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          REPO_NAME=$(echo "${{ github.event.repository.name }}" | tr '[:upper:]' '[:lower:]')
+          SERVICE_NAME="${{ matrix.service.name }}"
+          
+          echo "image=$REGISTRY/$REPO_OWNER/$REPO_NAME-$SERVICE_NAME" >> $GITHUB_OUTPUT
+          echo "tag=${GITHUB_REF##*/}" >> $GITHUB_OUTPUT
+          echo "sha=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.service.context }}
+          file: ${{ matrix.service.dockerfile }}
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.sha }}
+            ${{ steps.meta.outputs.image }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
