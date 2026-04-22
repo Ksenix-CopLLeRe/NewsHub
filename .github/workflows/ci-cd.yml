@@ -84,12 +84,20 @@ jobs:
           pip install -r user_content_service/requirements.txt
           pip install pytest pytest-asyncio pytest-mock aiosqlite
 
-      - name: Run unit tests
+      - name: Run feed service unit tests
         env:
-          DJANGO_SETTINGS_MODULE: ""
-          PYTHONPATH: ".:feed_service:reactions-service:user_content_service"
-        run: |
-          pytest tests/feed_service tests/reactions_service tests/user_content_service -v --tb=short -p no:django
+          PYTHONPATH: ".:feed_service"
+        run: pytest tests/feed_service -v --tb=short -p no:django
+
+      - name: Run reactions service unit tests
+        env:
+          PYTHONPATH: ".:reactions-service"
+        run: pytest tests/reactions_service -v --tb=short -p no:django
+
+      - name: Run user content service unit tests
+        env:
+          PYTHONPATH: ".:user_content_service"
+        run: pytest tests/user_content_service -v --tb=short -p no:django
 
   # ============== JOB 3: ИНТЕГРАЦИОННЫЕ ТЕСТЫ — FEED SERVICE ==============
   pytest-feed:
