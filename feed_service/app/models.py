@@ -20,4 +20,5 @@ class NewsItem(Base):
     # Составной индекс для поиска
     __table_args__ = (
         Index('ix_news_category_published', 'category', 'published_at'),
+        {'extend_existing': True}
     )
