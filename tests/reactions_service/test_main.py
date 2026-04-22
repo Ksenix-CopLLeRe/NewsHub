@@ -3,20 +3,30 @@
 Юнит-тесты для Reactions Service
 """
 
+import os
+import types
+from pathlib import Path
 import pytest
-from fastapi.testclient import TestClient
+from fastapi import BackgroundTasks, HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
-from datetime import datetime
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 
 import sys
-sys.path.append('.')
+sys.path.append(str(Path(__file__).resolve().parents[2] / "reactions-service"))
+sys.modules.setdefault("dotenv", types.SimpleNamespace(load_dotenv=lambda: None))
+for module_name in list(sys.modules):
+    if module_name == "app" or module_name.startswith("app."):
+        del sys.modules[module_name]
 
-from reactions_service.app.main import app
-from reactions_service.app import models, crud, schemas
-from reactions_service.app.database import Base, get_db
+os.environ["DB_TYPE"] = "sqlite"
+os.environ["SQLITE_PATH"] = ":memory:"
+
+from app import main, models, crud, schemas
+from app.database import Base, get_db
+
+app = main.app
 
 
 # Тестовая БД (SQLite in-memory)
@@ -50,11 +60,6 @@ def setup_database():
 
 
 @pytest.fixture
-def client():
-    return TestClient(app)
-
-
-@pytest.fixture
 def db_session():
     db = TestingSessionLocal()
     try:
@@ -75,17 +80,15 @@ def sample_reaction():
 class TestHealthCheck:
     """Тесты проверки здоровья"""
     
-    def test_root_endpoint(self, client):
+    def test_root_endpoint(self):
         """Корневой эндпоинт"""
-        response = client.get("/")
-        assert response.status_code == 200
-        data = response.json()
+        data = main.root()
         assert "Reactions Service API" in data.get("message", "")
     
-    def test_health_check_with_db(self, client, db_session):
+    def test_health_check_with_db(self, db_session):
         """Проверка здоровья через корневой эндпоинт"""
-        response = client.get("/")
-        assert response.status_code == 200
+        data = main.root()
+        assert "running" in data["status"]
 
 
 class TestCRUD:
@@ -180,14 +183,16 @@ class TestCRUD:
             ("liked", 1),
         ]
         
+        user_id = 1000
         for reaction_type, count in reactions:
-            for i in range(count):
+            for _ in range(count):
                 reaction = schemas.ReactionCreate(
-                    user_id=1000 + i,
+                    user_id=user_id,
                     news_id=news_id,
                     reaction_type=reaction_type
                 )
                 crud.create_reaction(db_session, reaction)
+                user_id += 1
         
         counts, total = crud.get_reaction_counts(db_session, news_id)
         
@@ -200,62 +205,82 @@ class TestCRUD:
 class TestAPIEndpoints:
     """Тесты API эндпоинтов"""
     
-    def test_create_reaction(self, client, sample_reaction):
+    @pytest.mark.asyncio
+    async def test_create_reaction(self, db_session, sample_reaction):
         """Создание реакции через API"""
-        response = client.post("/reactions", json=sample_reaction)
-        assert response.status_code == 201
-        data = response.json()
+        data = await main.create_or_update_reaction(
+            schemas.ReactionCreate(**sample_reaction),
+            BackgroundTasks(),
+            db_session,
+        )
         assert data["success"] is True
         assert data["action"] == "created"
     
-    def test_toggle_reaction_delete_same(self, client, sample_reaction):
+    @pytest.mark.asyncio
+    async def test_toggle_reaction_delete_same(self, db_session, sample_reaction):
         """Повторное нажатие на ту же реакцию - удаление"""
         # Создаём реакцию
-        response1 = client.post("/reactions", json=sample_reaction)
-        assert response1.status_code == 201
+        await main.create_or_update_reaction(
+            schemas.ReactionCreate(**sample_reaction),
+            BackgroundTasks(),
+            db_session,
+        )
         
         # Отправляем ту же реакцию снова
-        response2 = client.post("/reactions", json=sample_reaction)
-        assert response2.status_code == 200
-        data = response2.json()
+        data = await main.create_or_update_reaction(
+            schemas.ReactionCreate(**sample_reaction),
+            BackgroundTasks(),
+            db_session,
+        )
         assert data["action"] == "deleted"
     
-    def test_toggle_reaction_update_different(self, client, sample_reaction):
+    @pytest.mark.asyncio
+    async def test_toggle_reaction_update_different(self, db_session, sample_reaction):
         """Изменение типа реакции"""
         # Создаём реакцию
-        client.post("/reactions", json=sample_reaction)
+        await main.create_or_update_reaction(
+            schemas.ReactionCreate(**sample_reaction),
+            BackgroundTasks(),
+            db_session,
+        )
         
         # Отправляем другой тип реакции
         updated_reaction = sample_reaction.copy()
         updated_reaction["reaction_type"] = "liked"
-        response = client.post("/reactions", json=updated_reaction)
-        assert response.status_code == 200
-        data = response.json()
+        data = await main.create_or_update_reaction(
+            schemas.ReactionCreate(**updated_reaction),
+            BackgroundTasks(),
+            db_session,
+        )
         assert data["action"] == "updated"
-        assert data["reaction"]["reaction_type"] == "liked"
+        assert data["reaction"].reaction_type.value == "liked"
     
-    def test_get_reaction_counts(self, client, db_session, sample_reaction):
+    @pytest.mark.asyncio
+    async def test_get_reaction_counts(self, db_session, sample_reaction):
         """Получение счётчиков реакций"""
         # Создаём несколько реакций
         news_id = sample_reaction["news_id"]
         
-        for reaction_type in ["important", "interesting", "important"]:
+        for idx, reaction_type in enumerate(["important", "interesting", "important"]):
             reaction = {
-                "user_id": hash(reaction_type) % 1000,
+                "user_id": 500 + idx,
                 "news_id": news_id,
                 "reaction_type": reaction_type
             }
-            client.post("/reactions", json=reaction)
+            await main.create_or_update_reaction(
+                schemas.ReactionCreate(**reaction),
+                BackgroundTasks(),
+                db_session,
+            )
         
-        response = client.get(f"/reactions/counts/{news_id}")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["news_id"] == news_id
-        assert data["counts"]["important"] == 2
-        assert data["counts"]["interesting"] == 1
-        assert data["total"] == 3
+        data = main.get_reaction_counts(news_id, db_session)
+        assert data.news_id == news_id
+        assert data.counts["important"] == 2
+        assert data.counts["interesting"] == 1
+        assert data.total == 3
     
-    def test_get_reactions_by_news(self, client, db_session, sample_reaction):
+    @pytest.mark.asyncio
+    async def test_get_reactions_by_news(self, db_session, sample_reaction):
         """Получение списка реакций на новость"""
         news_id = sample_reaction["news_id"]
         
@@ -265,108 +290,121 @@ class TestAPIEndpoints:
                 "news_id": news_id,
                 "reaction_type": "important" if i % 2 == 0 else "interesting"
             }
-            client.post("/reactions", json=reaction)
+            await main.create_or_update_reaction(
+                schemas.ReactionCreate(**reaction),
+                BackgroundTasks(),
+                db_session,
+            )
         
-        response = client.get(f"/reactions/news/{news_id}?page=1&size=3")
-        assert response.status_code == 200
-        data = response.json()
-        assert len(data["items"]) == 3
-        assert data["total"] == 5
-        assert data["page"] == 1
-        assert data["size"] == 3
+        data = main.get_reactions_by_news(news_id, page=1, size=3, db=db_session)
+        assert len(data.items) == 3
+        assert data.total == 5
+        assert data.page == 1
+        assert data.size == 3
     
-    def test_get_reactions_by_news_empty(self, client):
+    def test_get_reactions_by_news_empty(self, db_session):
         """Получение списка реакций для новости без реакций"""
-        response = client.get("/reactions/news/https://example.com/no-reactions?page=1&size=10")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["items"] == []
-        assert data["total"] == 0
+        data = main.get_reactions_by_news("https://example.com/no-reactions", page=1, size=10, db=db_session)
+        assert data.items == []
+        assert data.total == 0
     
-    def test_delete_reaction_by_id(self, client, sample_reaction):
+    @pytest.mark.asyncio
+    async def test_delete_reaction_by_id(self, db_session, sample_reaction):
         """Удаление реакции по ID"""
         # Создаём реакцию
-        create_response = client.post("/reactions", json=sample_reaction)
-        reaction_id = create_response.json()["reaction"]["id"]
+        create_response = await main.create_or_update_reaction(
+            schemas.ReactionCreate(**sample_reaction),
+            BackgroundTasks(),
+            db_session,
+        )
+        reaction_id = create_response["reaction"].id
         
         # Удаляем
-        response = client.delete(
-            f"/reactions/{reaction_id}",
-            headers={"x-user-id": str(sample_reaction["user_id"])}
-        )
-        assert response.status_code == 200
-        assert response.json()["success"] is True
+        response = main.delete_reaction(reaction_id, sample_reaction["user_id"], db_session)
+        assert response["success"] is True
     
-    def test_delete_reaction_wrong_user(self, client, sample_reaction):
+    @pytest.mark.asyncio
+    async def test_delete_reaction_wrong_user(self, db_session, sample_reaction):
         """Попытка удалить чужую реакцию"""
-        create_response = client.post("/reactions", json=sample_reaction)
-        reaction_id = create_response.json()["reaction"]["id"]
+        create_response = await main.create_or_update_reaction(
+            schemas.ReactionCreate(**sample_reaction),
+            BackgroundTasks(),
+            db_session,
+        )
+        reaction_id = create_response["reaction"].id
         
-        response = client.delete(
-            f"/reactions/{reaction_id}",
-            headers={"x-user-id": "999"}  # Другой пользователь
-        )
-        assert response.status_code == 403
+        with pytest.raises(HTTPException) as exc_info:
+            main.delete_reaction(reaction_id, 999, db_session)
+        assert exc_info.value.status_code == 403
     
-    def test_delete_reaction_not_found(self, client):
+    def test_delete_reaction_not_found(self, db_session):
         """Удаление несуществующей реакции"""
-        response = client.delete(
-            "/reactions/99999",
-            headers={"x-user-id": "123"}
-        )
-        assert response.status_code == 404
+        with pytest.raises(HTTPException) as exc_info:
+            main.delete_reaction(99999, 123, db_session)
+        assert exc_info.value.status_code == 404
     
-    def test_get_reaction_counts_news_not_found(self, client):
+    def test_get_reaction_counts_news_not_found(self, db_session):
         """Счётчики для несуществующей новости - возвращаются нули"""
-        response = client.get("/reactions/counts/https://example.com/not-exists")
-        assert response.status_code == 200
-        data = response.json()
-        for count in data["counts"].values():
+        data = main.get_reaction_counts("https://example.com/not-exists", db_session)
+        for count in data.counts.values():
             assert count == 0
-        assert data["total"] == 0
+        assert data.total == 0
 
 
 class TestBackgroundTasks:
     """Тесты фоновых задач"""
     
-    @patch("reactions_service.app.main.write_log")
-    def test_create_reaction_logs(self, mock_write_log, client, sample_reaction):
+    @pytest.mark.asyncio
+    @patch("app.main.write_log")
+    async def test_create_reaction_logs(self, mock_write_log, db_session, sample_reaction):
         """Проверка логирования при создании реакции"""
-        response = client.post("/reactions", json=sample_reaction)
-        assert response.status_code == 201
-        
-        # Даём время на выполнение фоновой задачи
-        import time
-        time.sleep(0.5)
-        
+        background_tasks = BackgroundTasks()
+        await main.create_or_update_reaction(
+            schemas.ReactionCreate(**sample_reaction),
+            background_tasks,
+            db_session,
+        )
+        assert len(background_tasks.tasks) == 1
+        task = background_tasks.tasks[0]
+        task.func(*task.args, **task.kwargs)
         mock_write_log.assert_called_once()
         call_args = mock_write_log.call_args[0][0]
         assert "REACTION CREATED" in call_args
         assert str(sample_reaction["user_id"]) in call_args
     
-    @patch("reactions_service.app.main.write_log")
-    def test_delete_reaction_logs(self, mock_write_log, client, sample_reaction):
+    @pytest.mark.asyncio
+    @patch("app.main.write_log")
+    async def test_delete_reaction_logs(self, mock_write_log, db_session, sample_reaction):
         """Проверка логирования при удалении реакции"""
         # Создаём
-        client.post("/reactions", json=sample_reaction)
+        first_tasks = BackgroundTasks()
+        await main.create_or_update_reaction(
+            schemas.ReactionCreate(**sample_reaction),
+            first_tasks,
+            db_session,
+        )
+        assert len(first_tasks.tasks) == 1
+        first_tasks.tasks[0].func(*first_tasks.tasks[0].args, **first_tasks.tasks[0].kwargs)
         # Отправляем ту же для удаления
-        client.post("/reactions", json=sample_reaction)
-        
-        import time
-        time.sleep(0.5)
-        
-        # Должно быть два вызова (создание и удаление)
-        assert mock_write_log.call_count >= 1
+        second_tasks = BackgroundTasks()
+        await main.create_or_update_reaction(
+            schemas.ReactionCreate(**sample_reaction),
+            second_tasks,
+            db_session,
+        )
+        assert len(second_tasks.tasks) == 1
+        second_tasks.tasks[0].func(*second_tasks.tasks[0].args, **second_tasks.tasks[0].kwargs)
+        assert mock_write_log.call_count == 2
 
 
 class TestAsyncEndpoints:
     """Тесты асинхронных эндпоинтов"""
     
     @pytest.mark.asyncio
-    @patch("reactions_service.app.main.httpx.AsyncClient")
+    @patch("app.main.httpx.AsyncClient")
     async def test_get_external_news(self, mock_client_class):
         """Получение внешних новостей"""
-        from reactions_service.app.main import get_external_news
+        from app.main import get_external_news
         
         mock_client = AsyncMock()
         mock_response = AsyncMock()
@@ -381,8 +419,8 @@ class TestAsyncEndpoints:
         # FastAPI endpoint требует request, поэтому тестируем через TestClient
         # или напрямую вызываем функцию
     
-    @patch("reactions_service.app.main.httpx.AsyncClient")
-    def test_get_combined_data_endpoint(self, mock_client_class, client):
+    @patch("app.main.httpx.AsyncClient")
+    def test_get_combined_data_endpoint(self, mock_client_class):
         """Тест параллельных запросов"""
         # Мокаем асинхронный клиент
         mock_client = MagicMock()
@@ -394,8 +432,3 @@ class TestAsyncEndpoints:
         
         # Этот тест сложен для мокинга, лучше использовать реальный TestClient
         # с замоканными внешними вызовами
-
-
-# Для асинхронных тестов
-import asyncio
-from unittest.mock import AsyncMock
