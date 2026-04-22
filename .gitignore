@@ -66,6 +66,7 @@ dmypy.json
 .settings/
 .vscode-server/
 .vscode-remote/
+.claude/
 
 # Файлы с секретами и конфигурацией
 .env

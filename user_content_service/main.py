@@ -9,7 +9,7 @@ User Content Service — микросервис избранного и комм
 """
 
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Optional
 from urllib.parse import unquote
 
 from fastapi import Depends, FastAPI, HTTPException, Path, Query
@@ -54,7 +54,7 @@ def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _to_utc(dt: datetime | None) -> datetime | None:
+def _to_utc(dt: Optional[datetime]) -> Optional[datetime]:
     """Нормализует datetime в UTC (timezone-aware) для asyncpg."""
     if dt is None:
         return None
@@ -89,7 +89,7 @@ async def toggle_favorite(payload: FavoriteToggleRequest, db: AsyncSession = Dep
     existing = result.scalar_one_or_none()
 
     if existing:
-        db.delete(existing)
+        await db.delete(existing)
         await db.commit()
         return FavoriteToggleResponse(success=True, is_favorite=False, action="removed")
 
@@ -315,7 +315,7 @@ async def delete_comment(
             status_code=403,
             detail={"error": "Комментарий принадлежит другому пользователю", "code": 403},
         )
-    db.delete(comment)
+    await db.delete(comment)
     await db.commit()
     return {"success": True}
 
