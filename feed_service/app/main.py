@@ -155,6 +155,20 @@ def get_feed(
         "size": size
     }
 
+# ---------- GET /news/id/{id} — must be declared before /news/{url:path} ----------
+@app.get("/news/id/{news_id}", response_model=schemas.NewsResponse)
+def get_news_by_id(
+    news_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Получить новость по ID
+    """
+    news = crud.get_news_by_id(db, news_id)
+    if not news:
+        raise HTTPException(status_code=404, detail="News not found")
+    return news
+
 # ---------- GET /news/{url} ----------
 @app.get("/news/{url:path}", response_model=schemas.NewsResponse)
 def get_news_by_url(
@@ -170,20 +184,6 @@ def get_news_by_url(
             status_code=404,
             detail=f"News with URL {url} not found"
         )
-    return news
-
-# ---------- GET /news/{id} ----------
-@app.get("/news/id/{news_id}", response_model=schemas.NewsResponse)
-def get_news_by_id(
-    news_id: int,
-    db: Session = Depends(get_db)
-):
-    """
-    Получить новость по ID
-    """
-    news = crud.get_news_by_id(db, news_id)
-    if not news:
-        raise HTTPException(status_code=404, detail="News not found")
     return news
 
 # ---------- GET /categories ----------
