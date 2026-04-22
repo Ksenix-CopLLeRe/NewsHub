@@ -87,6 +87,7 @@ jobs:
       - name: Run unit tests
         env:
           DJANGO_SETTINGS_MODULE: ""
+          PYTHONPATH: ".:feed_service:reactions-service:user_content_service"
         run: |
           pytest tests/feed_service tests/reactions_service tests/user_content_service -v --tb=short -p no:django
 
