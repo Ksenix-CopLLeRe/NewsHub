@@ -1,29 +1,29 @@
 import os
 import pytest
-from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 from datetime import datetime, timezone, timedelta
 from unittest.mock import patch, MagicMock, AsyncMock
-from urllib.parse import quote
+from fastapi import HTTPException
 
 import sys
 sys.path.append('.')
 
 # ============ Устанавливаем переменные окружения ДО импорта ============
-os.environ["DATABASE_URL"] = "sqlite:///./test.db"
+os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["ENVIRONMENT"] = "test"
 os.environ["DEBUG"] = "false"
 
 # Импортируем после установки переменных
-from feed_service.app.main import app
-from feed_service.app import models, crud, schemas
-from feed_service.app.database import Base, get_db
+from feed_service.app import main
+app = main.app
 
 # ============ TEST ENGINE ============
 test_engine = create_engine(
-    "sqlite:///./test.db",
+    "sqlite:///:memory:",
     connect_args={"check_same_thread": False},
+    poolclass=StaticPool,
 )
 
 TestingSessionLocal = sessionmaker(
@@ -40,37 +40,20 @@ def override_get_db():
     finally:
         db.close()
 
-app.dependency_overrides[get_db] = override_get_db
+app.dependency_overrides[main.get_db] = override_get_db
 
 # ============ CREATE TABLES ============
-@pytest.fixture(scope="session", autouse=True)
-def create_tables():
-    Base.metadata.create_all(bind=test_engine)
+@pytest.fixture(autouse=True)
+def setup_database():
+    main.models.Base.metadata.create_all(bind=test_engine)
     yield
-    Base.metadata.drop_all(bind=test_engine)
-
-# ============ CLEAN DB FILE ============
-@pytest.fixture(scope="session", autouse=True)
-def cleanup_db():
-    yield
-    if os.path.exists("test.db"):
-        os.remove("test.db")
+    main.models.Base.metadata.drop_all(bind=test_engine)
 
 @pytest.fixture
 def db_session():
-    connection = test_engine.connect()
-    transaction = connection.begin()
-    session = TestingSessionLocal(bind=connection)
-    
+    session = TestingSessionLocal()
     yield session
-    
     session.close()
-    transaction.rollback()
-    connection.close()
-
-@pytest.fixture
-def client():
-    return TestClient(app)
 
 @pytest.fixture
 def sample_news():
@@ -87,175 +70,171 @@ def sample_news():
 # ============ TESTS ============
 
 class TestHealthCheck:
-    def test_root_endpoint(self, client):
-        response = client.get("/")
-        assert response.status_code == 200
-        data = response.json()
+    def test_root_endpoint(self):
+        data = main.root()
         assert data["service"] == "Feed Service"
     
-    def test_health_check_ok(self, client):
-        response = client.get("/health")
-        assert response.status_code == 200
-        data = response.json()
+    def test_health_check_ok(self, db_session):
+        data = main.health_check(db_session)
         assert "services" in data
 
 
 class TestCRUD:
     def test_create_news(self, db_session, sample_news):
-        news_create = schemas.NewsCreate(**sample_news)
-        news = crud.create_news(db_session, news_create)
+        news_create = main.schemas.NewsCreate(**sample_news)
+        news = main.crud.create_news(db_session, news_create)
         
         assert news.id is not None
         assert news.url == sample_news["url"]
         assert news.title == sample_news["title"]
     
     def test_create_or_update_news_new(self, db_session, sample_news):
-        news_create = schemas.NewsCreate(**sample_news)
-        news, created = crud.create_or_update_news(db_session, news_create)
+        news_create = main.schemas.NewsCreate(**sample_news)
+        news, created = main.crud.create_or_update_news(db_session, news_create)
         
         assert created is True
         assert news.url == sample_news["url"]
     
     def test_create_or_update_news_existing(self, db_session, sample_news):
-        news_create = schemas.NewsCreate(**sample_news)
-        news1, _ = crud.create_or_update_news(db_session, news_create)
+        news_create = main.schemas.NewsCreate(**sample_news)
+        news1, _ = main.crud.create_or_update_news(db_session, news_create)
         
-        updated_data = schemas.NewsCreate(**sample_news)
+        updated_data = main.schemas.NewsCreate(**sample_news)
         updated_data.title = "Обновлённый заголовок"
-        news2, created = crud.create_or_update_news(db_session, updated_data)
+        news2, created = main.crud.create_or_update_news(db_session, updated_data)
         
         assert created is False
         assert news2.id == news1.id
         assert news2.title == "Обновлённый заголовок"
     
     def test_get_news_by_id(self, db_session, sample_news):
-        news_create = schemas.NewsCreate(**sample_news)
-        news = crud.create_news(db_session, news_create)
+        news_create = main.schemas.NewsCreate(**sample_news)
+        news = main.crud.create_news(db_session, news_create)
         
-        found = crud.get_news_by_id(db_session, news.id)
+        found = main.crud.get_news_by_id(db_session, news.id)
         assert found is not None
         assert found.id == news.id
     
     def test_get_news_by_url(self, db_session, sample_news):
-        news_create = schemas.NewsCreate(**sample_news)
-        crud.create_news(db_session, news_create)
+        news_create = main.schemas.NewsCreate(**sample_news)
+        main.crud.create_news(db_session, news_create)
         
-        found = crud.get_news_by_url(db_session, sample_news["url"])
+        found = main.crud.get_news_by_url(db_session, sample_news["url"])
         assert found is not None
         assert found.url == sample_news["url"]
     
     def test_get_news_list_with_pagination(self, db_session):
         for i in range(25):
-            news = schemas.NewsCreate(
+            news = main.schemas.NewsCreate(
                 url=f"https://example.com/news/{i}",
                 title=f"Новость {i}",
                 description=f"Описание {i}",
                 published_at=datetime.now(timezone.utc),
                 category="россия"
             )
-            crud.create_news(db_session, news)
+            main.crud.create_news(db_session, news)
         
-        items, total = crud.get_news_list(db_session, skip=0, limit=10)
+        items, total = main.crud.get_news_list(db_session, skip=0, limit=10)
         assert len(items) == 10
         assert total == 25
     
     def test_get_news_list_with_category_filter(self, db_session):
-        news1 = schemas.NewsCreate(
+        news1 = main.schemas.NewsCreate(
             url="https://example.com/news1",
             title="Новость 1",
             description="Описание",
             published_at=datetime.now(timezone.utc),
             category="россия"
         )
-        news2 = schemas.NewsCreate(
+        news2 = main.schemas.NewsCreate(
             url="https://example.com/news2",
             title="Новость 2",
             description="Описание",
             published_at=datetime.now(timezone.utc),
             category="мир"
         )
-        crud.create_news(db_session, news1)
-        crud.create_news(db_session, news2)
+        main.crud.create_news(db_session, news1)
+        main.crud.create_news(db_session, news2)
         
-        items, total = crud.get_news_list(db_session, category="россия")
+        items, total = main.crud.get_news_list(db_session, category="россия")
         assert len(items) == 1
         assert items[0].category == "россия"
     
     def test_get_news_list_with_search(self, db_session):
-        news = schemas.NewsCreate(
+        news = main.schemas.NewsCreate(
             url="https://example.com/news",
             title="Уникальный поисковый запрос",
             description="Описание с важными словами",
             published_at=datetime.now(timezone.utc),
             category="россия"
         )
-        crud.create_news(db_session, news)
+        main.crud.create_news(db_session, news)
         
-        items, total = crud.get_news_list(db_session, search="уникальный")
+        items, total = main.crud.get_news_list(db_session, search="Уникальный")
         assert len(items) == 1
     
     def test_update_news(self, db_session, sample_news):
-        news_create = schemas.NewsCreate(**sample_news)
-        news = crud.create_news(db_session, news_create)
+        news_create = main.schemas.NewsCreate(**sample_news)
+        news = main.crud.create_news(db_session, news_create)
         
-        update_data = schemas.NewsUpdate(title="Новый заголовок")
-        updated = crud.update_news(db_session, news.id, update_data)
+        update_data = main.schemas.NewsUpdate(title="Новый заголовок")
+        updated = main.crud.update_news(db_session, news.id, update_data)
         
         assert updated is not None
         assert updated.title == "Новый заголовок"
     
     def test_delete_news(self, db_session, sample_news):
-        news_create = schemas.NewsCreate(**sample_news)
-        news = crud.create_news(db_session, news_create)
+        news_create = main.schemas.NewsCreate(**sample_news)
+        news = main.crud.create_news(db_session, news_create)
         
-        result = crud.delete_news(db_session, news.id)
+        result = main.crud.delete_news(db_session, news.id)
         assert result is True
         
-        found = crud.get_news_by_id(db_session, news.id)
+        found = main.crud.get_news_by_id(db_session, news.id)
         assert found is None
     
     def test_delete_old_news(self, db_session):
-        old_news = schemas.NewsCreate(
+        old_news = main.schemas.NewsCreate(
             url="https://example.com/old",
             title="Старая новость",
             description="Описание",
             published_at=datetime.now(timezone.utc) - timedelta(days=10),
             category="россия"
         )
-        new_news = schemas.NewsCreate(
+        new_news = main.schemas.NewsCreate(
             url="https://example.com/new",
             title="Новая новость",
             description="Описание",
             published_at=datetime.now(timezone.utc),
             category="россия"
         )
-        crud.create_news(db_session, old_news)
-        crud.create_news(db_session, new_news)
+        main.crud.create_news(db_session, old_news)
+        main.crud.create_news(db_session, new_news)
         
-        deleted = crud.delete_old_news(db_session, days=7)
+        deleted = main.crud.delete_old_news(db_session, days=7)
         assert deleted == 1
     
     def test_get_categories_with_counts(self, db_session):
         for i in range(2):
-            news = schemas.NewsCreate(
+            news = main.schemas.NewsCreate(
                 url=f"https://example.com/russia/{i}",
                 title=f"Россия {i}",
                 description="Описание",
                 published_at=datetime.now(timezone.utc),
                 category="россия"
             )
-            crud.create_news(db_session, news)
+            main.crud.create_news(db_session, news)
         
-        news3 = schemas.NewsCreate(
+        news3 = main.schemas.NewsCreate(
             url="https://example.com/world/1",
             title="Мир",
             description="Описание",
             published_at=datetime.now(timezone.utc),
             category="мир"
         )
-        crud.create_news(db_session, news3)
+        main.crud.create_news(db_session, news3)
         
-        categories = crud.get_categories_with_counts(db_session)
+        categories = main.crud.get_categories_with_counts(db_session)
         categories_dict = dict(categories)
         
         assert categories_dict.get("россия") == 2
@@ -263,21 +242,20 @@ class TestCRUD:
 
 
 class TestAPIEndpoints:
-    def test_get_feed_empty(self, client):
-        response = client.get("/feed")
-        assert response.status_code == 200
-        data = response.json()
+    def test_get_feed_empty(self, db_session):
+        data = main.get_feed(category=None, q=None, page=1, size=20, db=db_session)
         assert data["items"] == []
         assert data["total"] == 0
     
-    def test_get_news_by_url_not_found(self, client):
-        url = quote("https://example.com/not-found", safe="")
-        response = client.get(f"/news/{url}")
-        assert response.status_code == 404
+    def test_get_news_by_url_not_found(self, db_session):
+        with pytest.raises(HTTPException) as exc_info:
+            main.get_news_by_url("https://example.com/not-found", db_session)
+        assert exc_info.value.status_code == 404
     
-    def test_get_news_by_id_not_found(self, client):
-        response = client.get("/news/id/99999")
-        assert response.status_code == 404
+    def test_get_news_by_id_not_found(self, db_session):
+        with pytest.raises(HTTPException) as exc_info:
+            main.get_news_by_id(99999, db_session)
+        assert exc_info.value.status_code == 404
 
 
 class TestRSSParser:

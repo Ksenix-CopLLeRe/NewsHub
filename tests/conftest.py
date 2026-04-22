@@ -53,8 +53,8 @@ def test_comment_data(test_user_id) -> Dict[str, Any]:
     }
 
 
-# Маркеры для различных типов тестов
 def pytest_configure(config):
+    """Регистрируем пользовательские маркеры тестов."""
     config.addinivalue_line(
         "markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')"
     )
@@ -70,13 +70,13 @@ def pytest_configure(config):
 def disable_network_requests(monkeypatch):
     """
     Отключаем реальные сетевые запросы во время тестов
-    (для всех сервисов)
+    (для всех сервисов).
     """
     import requests
-    
+
     def mock_request(*args, **kwargs):
         raise RuntimeError("Network requests are disabled during tests!")
-    
+
     monkeypatch.setattr(requests, "get", mock_request)
     monkeypatch.setattr(requests, "post", mock_request)
     monkeypatch.setattr(requests, "put", mock_request)
