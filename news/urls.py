@@ -16,6 +16,6 @@ urlpatterns = [
     path('api/delete-comment/<int:comment_id>/', views.delete_comment, name='delete_comment'),
     
     # Админские эндпоинты
-    path('admin/stats/', views.admin_stats, name='admin_stats'),
+    path('management/stats/', views.admin_stats, name='admin_stats'),
 ]
 

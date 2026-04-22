@@ -59,11 +59,157 @@ jobs:
           flake8 ${{ matrix.service.path }} --count --select=E9,F63,F7,F82 --show-source --statistics || echo "⚠️ Linting issues"
           flake8 ${{ matrix.service.path }} --count --exit-zero --max-complexity=10 --statistics
 
-  # ============== JOB 2: СБОРКА DOCKER ОБРАЗОВ ==============
+  # ============== JOB 2: ЮНИТ-ТЕСТЫ (SQLite, без Docker) ==============
+  unit-tests:
+    name: 🔬 Unit Tests
+    runs-on: ubuntu-latest
+    needs: lint
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r feed_service/requirements.txt
+          pip install -r reactions-service/requirements.txt
+          pip install -r user_content_service/requirements.txt
+          pip install pytest pytest-asyncio pytest-mock aiosqlite
+
+      - name: Run feed service unit tests
+        env:
+          PYTHONPATH: ".:feed_service"
+        run: pytest tests/feed_service -v --tb=short -p no:django
+
+      - name: Run reactions service unit tests
+        env:
+          PYTHONPATH: ".:reactions-service"
+        run: pytest tests/reactions_service -v --tb=short -p no:django
+
+      - name: Run user content service unit tests
+        env:
+          PYTHONPATH: ".:user_content_service"
+        run: pytest tests/user_content_service -v --tb=short -p no:django
+
+  # ============== JOB 3: ИНТЕГРАЦИОННЫЕ ТЕСТЫ — FEED SERVICE ==============
+  pytest-feed:
+    name: 🧪 Integration Tests - Feed Service
+    runs-on: ubuntu-latest
+    needs: lint
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r feed_service/requirements.txt
+          pip install -r feed_service/requirements-test.txt
+
+      - name: Run feed service integration tests
+        working-directory: feed_service
+        run: pytest tests/ -v --tb=short
+
+  # ============== JOB 4: ИНТЕГРАЦИОННЫЕ ТЕСТЫ — REACTIONS SERVICE ==============
+  pytest-reactions:
+    name: 🧪 Integration Tests - Reactions Service
+    runs-on: ubuntu-latest
+    needs: lint
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r reactions-service/requirements.txt
+          pip install -r reactions-service/requirements-test.txt
+
+      - name: Run reactions service integration tests
+        working-directory: reactions-service
+        run: pytest tests/ -v --tb=short
+
+  # ============== JOB 5: ИНТЕГРАЦИОННЫЕ ТЕСТЫ — USER CONTENT SERVICE ==============
+  pytest-user-content:
+    name: 🧪 Integration Tests - User Content Service
+    runs-on: ubuntu-latest
+    needs: lint
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r user_content_service/requirements.txt
+          pip install -r user_content_service/requirements-test.txt
+
+      - name: Run user content service integration tests
+        working-directory: user_content_service
+        run: pytest tests/ -v --tb=short
+
+  # ============== JOB 6: ИНТЕГРАЦИОННЫЕ ТЕСТЫ — DJANGO МОНОЛИТ ==============
+  pytest-django:
+    name: 🧪 Integration Tests - Django Monolith
+    runs-on: ubuntu-latest
+    needs: lint
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-django responses
+
+      - name: Run Django integration tests
+        env:
+          DJANGO_SETTINGS_MODULE: config.settings
+          SECRET_KEY: ci-test-secret-key-not-for-production
+        run: pytest tests/integration/ -v --tb=short
+
+  # ============== JOB 7: СБОРКА DOCKER ОБРАЗОВ ==============
   build:
     name: 🐳 Build Docker Images
     runs-on: ubuntu-latest
-    needs: lint
+    needs: [unit-tests, pytest-feed, pytest-reactions, pytest-user-content, pytest-django]
     strategy:
       matrix:
         service:
@@ -94,9 +240,9 @@ jobs:
         run: |
           docker image ls | grep ${{ matrix.service.name }} || echo "⚠️ Image not found"
 
-  # ============== JOB 3: ИНТЕГРАЦИОННЫЕ ТЕСТЫ С COMPOSE ==============
+  # ============== JOB 8: SMOKE-ТЕСТЫ С DOCKER COMPOSE ==============
   integration-test:
-    name: 🧪 Integration Tests
+    name: 💨 Smoke Tests (Docker Compose)
     runs-on: ubuntu-latest
     needs: build
     
