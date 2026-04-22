@@ -58,7 +58,7 @@ class ExecuteResultStub:
 def db():
     mock = AsyncMock()
     mock.add = MagicMock()
-    mock.delete = MagicMock()
+    mock.delete = AsyncMock()
     return mock
 
 
