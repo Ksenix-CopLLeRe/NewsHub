@@ -25,7 +25,6 @@ RSS_FEEDS = {
     ],
     "экономика": [
         "https://www.kommersant.ru/RSS/section-economics.xml",
-        "https://www.finam.ru/net/analysis/conews/rsspoint",
         "https://www.vedomosti.ru/rss/rubric/economics"
     ],
     "наука": [
