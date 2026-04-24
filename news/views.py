@@ -60,7 +60,7 @@ def home(request):
 
         # картинка
         if 'urlToImage' not in article or not article.get('urlToImage'):
-            image_url = article.get('image_url') or ''
+            image_url = (article.get('image_url') or '').strip()
             article['urlToImage'] = image_url
     total_news = feed_data.get('total', 0)
     

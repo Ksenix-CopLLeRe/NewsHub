@@ -16,6 +16,13 @@ MOCK_ARTICLE = {
     "category": "россия",
 }
 
+MOCK_ARTICLE_WITHOUT_IMAGE = {
+    **MOCK_ARTICLE,
+    "url": "https://lenta.ru/news/no-image/",
+    "title": "Новость без картинки",
+    "image_url": "   ",
+}
+
 MOCK_FEED = {"items": [MOCK_ARTICLE], "total": 1, "page": 1, "size": 20}
 EMPTY_COUNTS = {"counts": {"important": 0, "interesting": 0, "shocking": 0, "useful": 0, "liked": 0}, "total": 0}
 EMPTY_REACTIONS = {"items": [], "total": 0, "page": 1, "size": 100}
@@ -41,6 +48,19 @@ class TestHomeView:
             mock.add(rsps.GET, f"{FEED_URL}/feed", json=MOCK_FEED)
             response = client.get("/")
         assert "Тестовая новость" in response.content.decode("utf-8")
+
+    def test_article_without_image_renders_without_placeholder(self, client):
+        with rsps.RequestsMock() as mock:
+            mock.add(
+                rsps.GET,
+                f"{FEED_URL}/feed",
+                json={"items": [MOCK_ARTICLE_WITHOUT_IMAGE], "total": 1, "page": 1, "size": 20},
+            )
+            response = client.get("/")
+        content = response.content.decode("utf-8")
+        assert "Новость без картинки" in content
+        assert "/static/images/no-image.png" not in content
+        assert 'src="   "' not in content
 
     def test_authenticated_user_calls_reactions_and_favorites(self, auth_client):
         with rsps.RequestsMock() as mock:
