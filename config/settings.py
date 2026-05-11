@@ -8,9 +8,14 @@ import dj_database_url
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'django-insecure-0s=j71^ih&+_=t2jkk!6+$55w1ud0br!0al7+*z(v%f7j7mw%8')
-
+_secret_key = os.getenv('DJANGO_SECRET_KEY')
 DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
+if not _secret_key:
+    if DEBUG:
+        _secret_key = 'django-insecure-local-dev-only-not-for-production'
+    else:
+        raise RuntimeError('DJANGO_SECRET_KEY environment variable is not set')
+SECRET_KEY = _secret_key
 
 ALLOWED_HOSTS = os.getenv('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
 
