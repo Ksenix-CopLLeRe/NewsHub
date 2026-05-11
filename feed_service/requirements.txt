@@ -6,3 +6,4 @@ alembic
 feedparser
 psycopg2-binary
 httpx
+prometheus-fastapi-instrumentator

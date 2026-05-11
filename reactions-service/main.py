@@ -4,6 +4,7 @@
 """
 
 from fastapi import FastAPI, HTTPException, Query, Header
+from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel
 from typing import Optional, List, Dict
 from datetime import datetime
@@ -56,6 +57,8 @@ app = FastAPI(
     description="Микросервис для управления эмоциональными реакциями пользователей на новости",
     version="1.0.0"
 )
+
+Instrumentator().instrument(app).expose(app)
 
 # ----- "База данных" в памяти (для заглушки) -----
 # В реальном проекте здесь была бы PostgreSQL
