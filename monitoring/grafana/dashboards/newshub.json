@@ -1,0 +1,146 @@
+{
+  "title": "NewsHub — Monitoring",
+  "uid": "newshub-overview",
+  "schemaVersion": 38,
+  "version": 3,
+  "refresh": "15s",
+  "time": { "from": "now-30m", "to": "now" },
+  "panels": [
+
+    {
+      "id": 0, "type": "text", "title": "",
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 2 },
+      "options": { "content": "## Availability — сервисы доступны?", "mode": "markdown" }
+    },
+
+    {
+      "id": 1, "title": "django-monolith", "type": "stat",
+      "gridPos": { "x": 0, "y": 2, "w": 6, "h": 4 },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] },
+          "mappings": [{ "type": "value", "options": { "0": { "text": "DOWN", "index": 0 }, "1": { "text": "UP", "index": 1 } } }]
+        }
+      },
+      "targets": [{ "expr": "up{job=\"django-monolith\"}", "legendFormat": "monolith" }]
+    },
+    {
+      "id": 2, "title": "feed-service", "type": "stat",
+      "gridPos": { "x": 6, "y": 2, "w": 6, "h": 4 },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] },
+          "mappings": [{ "type": "value", "options": { "0": { "text": "DOWN", "index": 0 }, "1": { "text": "UP", "index": 1 } } }]
+        }
+      },
+      "targets": [{ "expr": "up{job=\"feed-service\"}", "legendFormat": "feed" }]
+    },
+    {
+      "id": 3, "title": "reactions-service", "type": "stat",
+      "gridPos": { "x": 12, "y": 2, "w": 6, "h": 4 },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] },
+          "mappings": [{ "type": "value", "options": { "0": { "text": "DOWN", "index": 0 }, "1": { "text": "UP", "index": 1 } } }]
+        }
+      },
+      "targets": [{ "expr": "up{job=\"reactions-service\"}", "legendFormat": "reactions" }]
+    },
+    {
+      "id": 4, "title": "user-content-service", "type": "stat",
+      "gridPos": { "x": 18, "y": 2, "w": 6, "h": 4 },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] },
+          "mappings": [{ "type": "value", "options": { "0": { "text": "DOWN", "index": 0 }, "1": { "text": "UP", "index": 1 } } }]
+        }
+      },
+      "targets": [{ "expr": "up{job=\"user-content-service\"}", "legendFormat": "user-content" }]
+    },
+
+    {
+      "id": 10, "type": "text", "title": "",
+      "gridPos": { "x": 0, "y": 6, "w": 24, "h": 2 },
+      "options": { "content": "## Latency — время ответа (секунды)", "mode": "markdown" }
+    },
+
+    {
+      "id": 11, "title": "Latency p95 — FastAPI сервисы", "type": "timeseries",
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": { "mode": "palette-classic" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.5 }, { "color": "red", "value": 1 }] }
+        }
+      },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job=~\"feed-service|reactions-service|user-content-service\"}[1m])) by (job, le))", "legendFormat": "p95 {{job}}" },
+        { "expr": "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket{job=~\"feed-service|reactions-service|user-content-service\"}[1m])) by (job, le))", "legendFormat": "p50 {{job}}" }
+      ]
+    },
+    {
+      "id": 12, "title": "Latency p95 — Django monolith", "type": "timeseries",
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": { "mode": "palette-classic" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.5 }, { "color": "red", "value": 1 }] }
+        }
+      },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum(rate(django_http_requests_latency_including_middlewares_seconds_bucket[1m])) by (le))", "legendFormat": "p95 django-monolith" },
+        { "expr": "histogram_quantile(0.50, sum(rate(django_http_requests_latency_including_middlewares_seconds_bucket[1m])) by (le))", "legendFormat": "p50 django-monolith" }
+      ]
+    },
+
+    {
+      "id": 20, "type": "text", "title": "",
+      "gridPos": { "x": 0, "y": 16, "w": 24, "h": 2 },
+      "options": { "content": "## Error Rate — 5xx ошибок в секунду (0 = норма)", "mode": "markdown" }
+    },
+
+    {
+      "id": 21, "title": "Error Rate — FastAPI сервисы", "type": "timeseries",
+      "gridPos": { "x": 0, "y": 18, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "color": { "mode": "palette-classic" },
+          "custom": { "fillOpacity": 10 },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 0.01 }] }
+        }
+      },
+      "targets": [
+        { "expr": "sum(rate(http_requests_total{job=\"feed-service\", status_code=~\"5..\"}[1m])) or vector(0)", "legendFormat": "feed-service" },
+        { "expr": "sum(rate(http_requests_total{job=\"reactions-service\", status_code=~\"5..\"}[1m])) or vector(0)", "legendFormat": "reactions-service" },
+        { "expr": "sum(rate(http_requests_total{job=\"user-content-service\", status_code=~\"5..\"}[1m])) or vector(0)", "legendFormat": "user-content-service" }
+      ]
+    },
+    {
+      "id": 22, "title": "Error Rate — Django monolith", "type": "timeseries",
+      "gridPos": { "x": 12, "y": 18, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "color": { "mode": "palette-classic" },
+          "custom": { "fillOpacity": 10 },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 0.01 }] }
+        }
+      },
+      "targets": [
+        { "expr": "sum(rate(django_http_responses_total_by_status_total{status=~\"5..\"}[1m])) or vector(0)", "legendFormat": "django-monolith" }
+      ]
+    }
+
+  ]
+}

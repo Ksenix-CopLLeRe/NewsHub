@@ -6,3 +6,4 @@ alembic
 python-dotenv
 pydantic
 httpx
+prometheus-fastapi-instrumentator

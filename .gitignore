@@ -116,3 +116,4 @@ coverage.xml
 .pytest_cache/
 cover/
 .codex
+staticfiles/

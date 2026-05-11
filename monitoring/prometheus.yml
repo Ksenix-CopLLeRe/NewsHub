@@ -1,0 +1,24 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'django-monolith'
+    static_configs:
+      - targets: ['news:8000']
+    metrics_path: /metrics
+
+  - job_name: 'feed-service'
+    static_configs:
+      - targets: ['feed-service:8000']
+    metrics_path: /metrics
+
+  - job_name: 'reactions-service'
+    static_configs:
+      - targets: ['reactions-service:8000']
+    metrics_path: /metrics
+
+  - job_name: 'user-content-service'
+    static_configs:
+      - targets: ['user-content-service:8002']
+    metrics_path: /metrics
