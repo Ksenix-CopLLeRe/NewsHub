@@ -202,8 +202,11 @@ jobs:
       - name: Run Django integration tests
         env:
           DJANGO_SETTINGS_MODULE: config.settings
-          SECRET_KEY: ci-test-secret-key-not-for-production
-        run: pytest tests/integration/ -v --tb=short
+          DJANGO_SECRET_KEY: ci-test-secret-key-not-for-production
+          DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1
+        run: |
+          python manage.py collectstatic --noinput
+          pytest tests/integration/ -v --tb=short
 
   # ============== JOB 7: СБОРКА DOCKER ОБРАЗОВ ==============
   build:
