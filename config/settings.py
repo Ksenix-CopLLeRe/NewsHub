@@ -39,6 +39,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django_prometheus.middleware.PrometheusBeforeMiddleware',
+    'news.middleware.CorrelationIdMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -146,6 +147,35 @@ if not USE_MICROSERVICES:
     pass
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# ============ Logging ============
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'filters': {
+        'correlation_id': {
+            '()': 'news.middleware.CorrelationIdFilter',
+        },
+    },
+    'formatters': {
+        'json': {
+            '()': 'news.middleware.JsonFormatter',  # wraps pythonjsonlogger.json.JsonFormatter
+            'fmt': '%(asctime)s %(levelname)s %(name)s %(message)s %(correlation_id)s %(service)s',
+            'datefmt': '%Y-%m-%dT%H:%M:%SZ',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'json',
+            'filters': ['correlation_id'],
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': 'INFO',
+    },
+}
 
 # ============ Sentry ============
 _sentry_dsn = os.getenv('SENTRY_DSN')

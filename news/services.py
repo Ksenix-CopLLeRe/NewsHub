@@ -8,6 +8,12 @@ import requests
 from typing import Optional, List, Dict, Set, Tuple
 from urllib.parse import quote
 from django.conf import settings
+from news.middleware import correlation_id_var
+
+
+def _cid_headers() -> Dict[str, str]:
+    cid = correlation_id_var.get("")
+    return {"X-Correlation-ID": cid} if cid else {}
 
 # ============ Настройки ============
 FEED_SERVICE_URL = getattr(settings, 'FEED_SERVICE_URL', 'http://feed-service:8003')
@@ -55,6 +61,7 @@ class FeedServiceClient:
             response = requests.get(
                 f"{self.base_url}/feed",
                 params=params,
+                headers=_cid_headers(),
                 timeout=REQUEST_TIMEOUT
             )
             response.raise_for_status()
@@ -76,6 +83,7 @@ class FeedServiceClient:
             encoded_url = quote(url, safe='')
             response = requests.get(
                 f"{self.base_url}/news/{encoded_url}",
+                headers=_cid_headers(),
                 timeout=REQUEST_TIMEOUT
             )
             if response.status_code == 200:
@@ -89,6 +97,7 @@ class FeedServiceClient:
         try:
             response = requests.get(
                 f"{self.base_url}/categories",
+                headers=_cid_headers(),
                 timeout=REQUEST_TIMEOUT
             )
             if response.status_code == 200:
@@ -102,6 +111,7 @@ class FeedServiceClient:
         try:
             response = requests.get(
                 f"{self.base_url}/stats",
+                headers=_cid_headers(),
                 timeout=REQUEST_TIMEOUT
             )
             if response.status_code == 200:
@@ -148,6 +158,7 @@ class ReactionsServiceClient:
             response = requests.post(
                 f"{self.base_url}/reactions",
                 json=payload,
+                headers=_cid_headers(),
                 timeout=REQUEST_TIMEOUT
             )
             response.raise_for_status()
@@ -172,6 +183,7 @@ class ReactionsServiceClient:
             encoded_url = quote(news_url, safe='')
             response = requests.get(
                 f"{self.base_url}/reactions/counts/{encoded_url}",
+                headers=_cid_headers(),
                 timeout=REQUEST_TIMEOUT
             )
             if response.status_code == 200:
@@ -205,6 +217,7 @@ class ReactionsServiceClient:
             response = requests.get(
                 f"{self.base_url}/reactions/news/{encoded_url}",
                 params={'page': 1, 'size': 100},
+                headers=_cid_headers(),
                 timeout=REQUEST_TIMEOUT
             )
             if response.status_code == 200:
@@ -284,6 +297,7 @@ class UserContentServiceClient:
             response = requests.post(
                 f"{self.base_url}/favorites/toggle",
                 json=payload,
+                headers=_cid_headers(),
                 timeout=REQUEST_TIMEOUT
             )
             response.raise_for_status()
@@ -309,6 +323,7 @@ class UserContentServiceClient:
             response = requests.get(
                 f"{self.base_url}/favorites",
                 params=params,
+                headers=_cid_headers(),
                 timeout=REQUEST_TIMEOUT
             )
             if response.status_code == 200:
@@ -332,6 +347,7 @@ class UserContentServiceClient:
             response = requests.get(
                 f"{self.base_url}/favorites/urls",
                 params={'user_id': user_id},
+                headers=_cid_headers(),
                 timeout=REQUEST_TIMEOUT
             )
             if response.status_code == 200:
@@ -350,6 +366,7 @@ class UserContentServiceClient:
             response = requests.get(
                 f"{self.base_url}/favorites/check/{encoded_url}",
                 params={'user_id': user_id},
+                headers=_cid_headers(),
                 timeout=REQUEST_TIMEOUT
             )
             if response.status_code == 200:
@@ -369,6 +386,7 @@ class UserContentServiceClient:
             response = requests.post(
                 f"{self.base_url}/favorites/{article_id}/comments",
                 json=payload,
+                headers=_cid_headers(),
                 timeout=REQUEST_TIMEOUT
             )
             response.raise_for_status()
@@ -392,6 +410,7 @@ class UserContentServiceClient:
             response = requests.put(
                 f"{self.base_url}/comments/{comment_id}",
                 json=payload,
+                headers=_cid_headers(),
                 timeout=REQUEST_TIMEOUT
             )
             response.raise_for_status()
@@ -413,6 +432,7 @@ class UserContentServiceClient:
             response = requests.delete(
                 f"{self.base_url}/comments/{comment_id}",
                 params={'user_id': user_id},
+                headers=_cid_headers(),
                 timeout=REQUEST_TIMEOUT
             )
             response.raise_for_status()
@@ -435,6 +455,7 @@ class UserContentServiceClient:
             response = requests.get(
                 f"{self.base_url}/favorites/{article_id}/comments",
                 params={'user_id': user_id, 'page': page, 'size': size},
+                headers=_cid_headers(),
                 timeout=REQUEST_TIMEOUT
             )
             if response.status_code == 200:

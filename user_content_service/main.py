@@ -8,7 +8,9 @@ User Content Service — микросервис избранного и комм
 Через Docker: см. Dockerfile.user-content-service
 """
 
+import logging
 import os
+import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
 from urllib.parse import unquote
@@ -18,8 +20,26 @@ from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
 
 from .database import get_db, init_db
+from .logging_config import correlation_id_var, setup_json_logging
+
+setup_json_logging("user-content-service")
+logger = logging.getLogger(__name__)
+
+
+class CorrelationIdMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        cid = request.headers.get("X-Correlation-ID") or str(uuid.uuid4())
+        token = correlation_id_var.set(cid)
+        try:
+            response = await call_next(request)
+        finally:
+            correlation_id_var.reset(token)
+        response.headers["X-Correlation-ID"] = cid
+        return response
 from .models import Comment as CommentModel
 from .models import FavoriteArticle as FavoriteArticleModel
 from .schemas import (
@@ -59,6 +79,7 @@ app = FastAPI(
     version="1.0.0",
 )
 
+app.add_middleware(CorrelationIdMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

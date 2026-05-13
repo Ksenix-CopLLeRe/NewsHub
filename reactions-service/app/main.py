@@ -1,16 +1,39 @@
-from fastapi import FastAPI, Depends, HTTPException, Header, Query, BackgroundTasks
-from sqlalchemy.orm import Session
-from sqlalchemy import text
-from typing import Optional
-from urllib.parse import unquote
-from datetime import datetime
+import uuid
+import logging
 import os
 import httpx
 import asyncio
 import time
+from datetime import datetime
+from typing import Optional
+from urllib.parse import unquote
+
+from fastapi import FastAPI, Depends, HTTPException, Header, Query, BackgroundTasks
+from prometheus_fastapi_instrumentator import Instrumentator
+from sqlalchemy.orm import Session
+from sqlalchemy import text
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+
 from app import schemas, models, crud
 from app.database import engine, get_db
+from app.logging_config import correlation_id_var, setup_json_logging
 from app.schemas import ReactionType
+
+setup_json_logging("reactions-service")
+logger = logging.getLogger(__name__)
+
+
+class CorrelationIdMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        cid = request.headers.get("X-Correlation-ID") or str(uuid.uuid4())
+        token = correlation_id_var.set(cid)
+        try:
+            response = await call_next(request)
+        finally:
+            correlation_id_var.reset(token)
+        response.headers["X-Correlation-ID"] = cid
+        return response
 
 _sentry_dsn = os.getenv("SENTRY_DSN")
 if _sentry_dsn:
@@ -56,6 +79,10 @@ app = FastAPI(
     description="Микросервис для управления эмоциональными реакциями пользователей на новости",
     version="1.0.0"
 )
+
+app.add_middleware(CorrelationIdMiddleware)
+
+Instrumentator().instrument(app).expose(app)
 
 # ========== Функция для фонового логирования ==========
 

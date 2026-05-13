@@ -1,25 +1,39 @@
 # app/main.py
+import uuid
+import logging
+import os
+import time
+import asyncio
+from contextlib import asynccontextmanager
+from typing import Optional, List
+
 from fastapi import FastAPI, Depends, HTTPException, Query, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from typing import Optional, List
-from app.database import SessionLocal
-from app import crud, models, schemas
-import os
-import time
-import logging
-import asyncio
-from contextlib import asynccontextmanager
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
 
-from app import models, schemas, crud, rss_parser
-from app.database import engine, get_db
+from app import crud, models, schemas, rss_parser
+from app.database import SessionLocal, engine, get_db
+from app.logging_config import correlation_id_var, setup_json_logging
 from app.rss_parser import update_category_async, update_all_categories_async
 
-# Настройка логирования
-logging.basicConfig(level=logging.INFO)
+setup_json_logging("feed-service")
 logger = logging.getLogger(__name__)
+
+
+class CorrelationIdMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        cid = request.headers.get("X-Correlation-ID") or str(uuid.uuid4())
+        token = correlation_id_var.set(cid)
+        try:
+            response = await call_next(request)
+        finally:
+            correlation_id_var.reset(token)
+        response.headers["X-Correlation-ID"] = cid
+        return response
 
 _sentry_dsn = os.getenv("SENTRY_DSN")
 if _sentry_dsn:
@@ -109,7 +123,7 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS
+app.add_middleware(CorrelationIdMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
