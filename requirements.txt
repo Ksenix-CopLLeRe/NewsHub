@@ -16,3 +16,4 @@ urllib3==2.5.0
 whitenoise==6.8.0
 psutil==6.1.1
 sentry-sdk[django]==2.19.2
+django-prometheus==2.3.1

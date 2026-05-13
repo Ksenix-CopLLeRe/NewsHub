@@ -4,3 +4,4 @@ sqlalchemy[asyncio]>=2.0
 asyncpg
 psutil
 sentry-sdk[fastapi]==2.19.2
+prometheus-fastapi-instrumentator

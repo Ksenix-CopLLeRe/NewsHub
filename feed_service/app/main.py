@@ -1,6 +1,7 @@
 # app/main.py
 from fastapi import FastAPI, Depends, HTTPException, Query, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from prometheus_fastapi_instrumentator import Instrumentator
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from typing import Optional, List
@@ -116,6 +117,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+Instrumentator().instrument(app).expose(app)
 
 # ============ ЭНДПОИНТЫ ============
 

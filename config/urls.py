@@ -20,7 +20,8 @@ from django.urls import path, include
 from config.health import health_view
 
 urlpatterns = [
+    path('', include('django_prometheus.urls')),
     path('admin/', admin.site.urls),
     path('health/', health_view, name='health'),
-    path('', include('news.urls')),  # ← добавляем эту строку
+    path('', include('news.urls')),
 ]
