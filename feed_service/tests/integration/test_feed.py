@@ -7,7 +7,8 @@ def test_health_returns_healthy(client):
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "healthy"
-    assert data["services"]["database"] == "healthy"
+    assert data["database"]["ok"] is True
+    assert data["dependencies"]["postgresql"]["ok"] is True
 
 
 def test_health_reports_news_count(client, make_news):
