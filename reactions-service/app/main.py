@@ -1,14 +1,52 @@
 from fastapi import FastAPI, Depends, HTTPException, Header, Query, BackgroundTasks
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from typing import Optional
 from urllib.parse import unquote
 from datetime import datetime
+import os
 import httpx
 import asyncio
 import time
 from app import schemas, models, crud
 from app.database import engine, get_db
 from app.schemas import ReactionType
+
+_sentry_dsn = os.getenv("SENTRY_DSN")
+if _sentry_dsn:
+    import sentry_sdk
+    from sentry_sdk.integrations.starlette import StarletteIntegration
+    from sentry_sdk.integrations.fastapi import FastApiIntegration
+
+    sentry_sdk.init(
+        dsn=_sentry_dsn,
+        integrations=[
+            StarletteIntegration(transaction_style="endpoint"),
+            FastApiIntegration(transaction_style="endpoint"),
+        ],
+        traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.0")),
+        environment=os.getenv("SENTRY_ENVIRONMENT", os.getenv("ENVIRONMENT", "development")),
+    )
+
+
+def _memory_rss_mb():
+    try:
+        import psutil
+
+        return round(psutil.Process(os.getpid()).memory_info().rss / 1024 / 1024, 2)
+    except Exception:
+        return None
+
+
+def _demo_external_dependency():
+    if os.getenv("HEALTH_CHECK_EXTERNAL_API", "true").lower() != "true":
+        return {"skipped": True}
+    try:
+        r = httpx.get("https://jsonplaceholder.typicode.com/posts/1", timeout=3.0)
+        return {"ok": r.status_code < 500, "status_code": r.status_code}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)[:160]}
+
 
 # Создаем таблицы (только для разработки!)
 # models.Base.metadata.create_all(bind=engine)
@@ -238,8 +276,39 @@ def root():
     return {
         "message": "Reactions Service API",
         "status": "running with PostgreSQL",
-        "docs": "/docs"
+        "docs": "/docs",
+        "health": "/health",
     }
+
+
+@app.get("/health")
+def health_check(db: Session = Depends(get_db)):
+    """БД, память, демо-зависимость (JSONPlaceholder)."""
+    db_ok = True
+    db_detail = "ok"
+    try:
+        db.execute(text("SELECT 1"))
+    except Exception as exc:
+        db_ok = False
+        db_detail = str(exc)[:200]
+
+    ext = _demo_external_dependency()
+    ext_ok = ext.get("skipped") or ext.get("ok") is True
+    mem_mb = _memory_rss_mb()
+    overall_ok = db_ok and ext_ok
+
+    return {
+        "status": "healthy" if overall_ok else "degraded",
+        "service": "reactions-service",
+        "database": {"ok": db_ok, "detail": db_detail},
+        "memory": {"rss_mb": mem_mb},
+        "dependencies": {
+            "postgresql": {"ok": db_ok},
+            "demo_external_api": ext,
+        },
+        "timestamp": time.time(),
+    }
+
 
 @app.delete("/reactions/{reaction_id}")
 def delete_reaction(

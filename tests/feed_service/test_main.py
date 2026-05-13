@@ -14,6 +14,7 @@ sys.path.append('.')
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["ENVIRONMENT"] = "test"
 os.environ["DEBUG"] = "false"
+os.environ["HEALTH_CHECK_SAMPLE_RSS"] = "false"
 
 # Импортируем после установки переменных
 from feed_service.app import main
@@ -76,7 +77,9 @@ class TestHealthCheck:
     
     def test_health_check_ok(self, db_session):
         data = main.health_check(db_session)
-        assert "services" in data
+        assert "database" in data
+        assert "dependencies" in data
+        assert "memory" in data
 
 
 class TestCRUD:
