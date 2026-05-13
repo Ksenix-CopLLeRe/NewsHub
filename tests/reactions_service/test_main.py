@@ -22,6 +22,7 @@ for module_name in list(sys.modules):
 
 os.environ["DB_TYPE"] = "sqlite"
 os.environ["SQLITE_PATH"] = ":memory:"
+os.environ["HEALTH_CHECK_EXTERNAL_API"] = "false"
 
 from app import main, models, crud, schemas
 from app.database import Base, get_db
@@ -89,6 +90,12 @@ class TestHealthCheck:
         """Проверка здоровья через корневой эндпоинт"""
         data = main.root()
         assert "running" in data["status"]
+
+    def test_health_endpoint(self, db_session):
+        data = main.health_check(db_session)
+        assert data["service"] == "reactions-service"
+        assert data["database"]["ok"] is True
+        assert "memory" in data
 
 
 class TestCRUD:

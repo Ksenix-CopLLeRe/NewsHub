@@ -6,6 +6,7 @@ from sqlalchemy import text
 from typing import Optional, List
 from app.database import SessionLocal
 from app import crud, models, schemas
+import os
 import time
 import logging
 import asyncio
@@ -18,6 +19,46 @@ from app.rss_parser import update_category_async, update_all_categories_async
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+_sentry_dsn = os.getenv("SENTRY_DSN")
+if _sentry_dsn:
+    import sentry_sdk
+    from sentry_sdk.integrations.starlette import StarletteIntegration
+    from sentry_sdk.integrations.fastapi import FastApiIntegration
+
+    sentry_sdk.init(
+        dsn=_sentry_dsn,
+        integrations=[
+            StarletteIntegration(transaction_style="endpoint"),
+            FastApiIntegration(transaction_style="endpoint"),
+        ],
+        traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.0")),
+        environment=os.getenv("SENTRY_ENVIRONMENT", os.getenv("ENVIRONMENT", "development")),
+    )
+
+
+def _memory_rss_mb():
+    try:
+        import psutil
+
+        return round(psutil.Process(os.getpid()).memory_info().rss / 1024 / 1024, 2)
+    except Exception:
+        return None
+
+
+def _sample_rss_dependency():
+    if os.getenv("HEALTH_CHECK_SAMPLE_RSS", "true").lower() != "true":
+        return {"skipped": True}
+    try:
+        import httpx
+
+        first_list = next(iter(rss_parser.RSS_FEEDS.values()))
+        url = first_list[0]
+        r = httpx.get(url, timeout=3.0, follow_redirects=True)
+        return {"ok": r.status_code < 500, "status_code": r.status_code}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)[:160]}
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -92,39 +133,41 @@ def root():
 
 @app.get("/health")
 def health_check(db: Session = Depends(get_db)):
-    """Проверка здоровья сервиса"""
-    db_status = "unknown"
+    """Проверка здоровья сервиса: БД, память, зависимости (образец RSS)."""
+    db_ok = True
+    db_detail = "ok"
     total_news = 0
-    
+
     try:
-        # Проверяем подключение к БД
         db.execute(text("SELECT 1"))
-        db_status = "healthy"
-    except Exception as e:
-        db_status = f"unhealthy: {e}"
-    
-    # Получаем количество новостей
+    except Exception as exc:
+        db_ok = False
+        db_detail = str(exc)[:200]
+
     try:
         total_news = db.query(models.NewsItem).count()
-    except Exception as e:
-        # Если ошибка, но БД уже unhealthy, добавляем детали
-        if db_status == "healthy":
-            db_status = f"unhealthy: {e}"
-    
-    # Определяем общий статус
-    status = "healthy"
-    if db_status != "healthy":
-        status = "degraded"
-    
+    except Exception as exc:
+        if db_ok:
+            db_ok = False
+            db_detail = str(exc)[:200]
+
+    rss_dep = _sample_rss_dependency()
+    mem_mb = _memory_rss_mb()
+
+    rss_ok = rss_dep.get("skipped") or rss_dep.get("ok") is True
+    overall_ok = db_ok and rss_ok
+
     return {
-        "status": status,
-        "timestamp": time.time(),
-        "services": {
-            "database": db_status
+        "status": "healthy" if overall_ok else "degraded",
+        "service": "feed-service",
+        "database": {"ok": db_ok, "detail": db_detail},
+        "memory": {"rss_mb": mem_mb},
+        "dependencies": {
+            "postgresql": {"ok": db_ok},
+            "sample_rss_source": rss_dep,
         },
-        "stats": {
-            "total_news": total_news
-        }
+        "stats": {"total_news": total_news},
+        "timestamp": time.time(),
     }
 
 # ---------- GET /feed ----------

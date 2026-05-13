@@ -1,3 +1,8 @@
+import os
+
+# Не ходить во внешний RSS при /health в тестах (стабильный CI без сети к источникам)
+os.environ.setdefault("HEALTH_CHECK_SAMPLE_RSS", "false")
+
 import pytest
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone

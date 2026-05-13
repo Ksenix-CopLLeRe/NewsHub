@@ -14,3 +14,5 @@ sqlparse==0.5.3
 tzdata==2025.2
 urllib3==2.5.0
 whitenoise==6.8.0
+psutil==6.1.1
+sentry-sdk[django]==2.19.2

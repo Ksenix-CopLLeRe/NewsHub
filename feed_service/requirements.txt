@@ -6,3 +6,5 @@ alembic
 feedparser
 psycopg2-binary
 httpx
+psutil
+sentry-sdk[fastapi]==2.19.2

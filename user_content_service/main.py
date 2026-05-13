@@ -8,6 +8,7 @@ User Content Service — микросервис избранного и комм
 Через Docker: см. Dockerfile.user-content-service
 """
 
+import os
 from datetime import datetime, timezone
 from typing import List, Optional
 from urllib.parse import unquote
@@ -34,6 +35,22 @@ from .schemas import (
     FavoriteUrlsResponse,
     FavoriteWithComments,
 )
+
+_sentry_dsn = os.getenv("SENTRY_DSN")
+if _sentry_dsn:
+    import sentry_sdk
+    from sentry_sdk.integrations.starlette import StarletteIntegration
+    from sentry_sdk.integrations.fastapi import FastApiIntegration
+
+    sentry_sdk.init(
+        dsn=_sentry_dsn,
+        integrations=[
+            StarletteIntegration(transaction_style="endpoint"),
+            FastApiIntegration(transaction_style="endpoint"),
+        ],
+        traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.0")),
+        environment=os.getenv("SENTRY_ENVIRONMENT", os.getenv("ENVIRONMENT", "development")),
+    )
 
 app = FastAPI(
     title="User Content Service",

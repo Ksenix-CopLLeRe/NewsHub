@@ -143,3 +143,17 @@ if not USE_MICROSERVICES:
     pass
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# ============ Sentry ============
+_sentry_dsn = os.getenv('SENTRY_DSN')
+if _sentry_dsn:
+    import sentry_sdk
+    from sentry_sdk.integrations.django import DjangoIntegration
+
+    sentry_sdk.init(
+        dsn=_sentry_dsn,
+        integrations=[DjangoIntegration()],
+        traces_sample_rate=float(os.getenv('SENTRY_TRACES_SAMPLE_RATE', '0.0')),
+        environment=os.getenv('SENTRY_ENVIRONMENT', os.getenv('ENVIRONMENT', 'production')),
+        send_default_pii=False,
+    )

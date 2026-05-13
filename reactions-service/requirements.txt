@@ -6,3 +6,5 @@ alembic
 python-dotenv
 pydantic
 httpx
+psutil
+sentry-sdk[fastapi]==2.19.2
